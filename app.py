@@ -161,13 +161,6 @@ qris_df = pd.concat(
 qris_df.columns = qris_df.columns.str.strip()
 
 # ==========================================
-# FILTER STATUS BERHASIL
-# ==========================================
-qris_df = qris_df[
-    qris_df["Status"] == "BERHASIL"
-]
-
-# ==========================================
 # FORMAT TANGGAL QRIS
 # ==========================================
 qris_df["Tanggal"] = pd.to_datetime(

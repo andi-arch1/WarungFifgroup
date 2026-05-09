@@ -59,9 +59,21 @@ st.divider()
 # ==========================================
 stock_file = "data/stock_harian.xlsx"
 
-qris_lt3_file = "data/qris_lt3.csv"
-qris_lt8_file = "data/qris_lt8.csv"
-qris_lt9_file = "data/qris_lt9.csv"
+# ==========================================
+# LOAD QRIS FILE
+# ==========================================
+try:
+
+    lt3 = pd.read_excel(qris_lt3_file)
+
+    lt8 = pd.read_excel(qris_lt8_file)
+
+    lt9 = pd.read_excel(qris_lt9_file)
+
+except Exception as e:
+
+    st.error(f"❌ Error membaca file QRIS: {e}")
+    st.stop()
 
 # ==========================================
 # CLEAN RUPIAH FUNCTION

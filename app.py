@@ -118,7 +118,7 @@ stock_df["Lantai"] = (
 )
 
 # ==========================================
-# FORMAT TANGGAL STOCK
+# FORMAT TANGGAL
 # ==========================================
 stock_df["Tanggal"] = pd.to_datetime(
     stock_df["Tanggal"]
@@ -129,14 +129,53 @@ stock_df["Tanggal"] = pd.to_datetime(
 # ==========================================
 try:
 
-    lt3 = pd.read_csv(qris_lt3_file)
-    lt8 = pd.read_csv(qris_lt8_file)
-    lt9 = pd.read_csv(qris_lt9_file)
+    lt3 = pd.read_csv(
+        qris_lt3_file,
+        encoding="utf-8-sig"
+    )
+
+    lt8 = pd.read_csv(
+        qris_lt8_file,
+        encoding="utf-8-sig"
+    )
+
+    lt9 = pd.read_csv(
+        qris_lt9_file,
+        encoding="utf-8-sig"
+    )
 
 except:
 
     st.error("❌ File CSV QRIS tidak ditemukan")
     st.stop()
+
+# ==========================================
+# CONCAT QRIS
+# ==========================================
+qris_df = pd.concat(
+    [lt3, lt8, lt9],
+    ignore_index=True
+)
+
+# ==========================================
+# CLEAN QRIS COLUMNS
+# ==========================================
+qris_df.columns = (
+    qris_df.columns
+    .str.strip()
+    .str.replace("\ufeff", "")
+    .str.replace("\n", " ")
+    .str.replace("\r", " ")
+)
+
+# ==========================================
+# RENAME COLUMNS
+# ==========================================
+qris_df = qris_df.rename(columns={
+    qris_df.columns[0]: "Nama Merchant",
+    qris_df.columns[1]: "Tanggal Transaksi",
+    qris_df.columns[6]: "Total Terbayar"
+})
 
 # ==========================================
 # MERCHANT MAPPING
@@ -148,28 +187,16 @@ merchant_mapping = {
 }
 
 # ==========================================
-# CONCAT QRIS
-# ==========================================
-qris_df = pd.concat(
-    [lt3, lt8, lt9],
-    ignore_index=True
-)
-
-# ==========================================
-# CLEAN QRIS COLUMN
-# ==========================================
-qris_df.columns = qris_df.columns.str.strip()
-
-# ==========================================
 # FORMAT TANGGAL QRIS
 # ==========================================
 qris_df["Tanggal"] = pd.to_datetime(
     qris_df["Tanggal Transaksi"],
-    dayfirst=True
+    dayfirst=True,
+    errors="coerce"
 ).dt.date
 
 # ==========================================
-# FORMAT NOMINAL
+# CLEAN TOTAL TERBAYAR
 # ==========================================
 qris_df["Total Terbayar"] = (
     qris_df["Total Terbayar"]
@@ -177,7 +204,7 @@ qris_df["Total Terbayar"] = (
 )
 
 # ==========================================
-# MAPPING LANTAI
+# MAP LANTAI
 # ==========================================
 qris_df["Lantai"] = (
     qris_df["Nama Merchant"]
@@ -211,8 +238,8 @@ with col_filter2:
 
     tanggal_filter = st.multiselect(
         "Pilih Tanggal",
-        options=sorted(stock_df["Tanggal"].unique()),
-        default=sorted(stock_df["Tanggal"].unique())
+        options=sorted(stock_df["Tanggal"].dropna().unique()),
+        default=sorted(stock_df["Tanggal"].dropna().unique())
     )
 
 # ==========================================
@@ -280,7 +307,7 @@ col4.metric(
 st.divider()
 
 # ==========================================
-# REKONSILIASI TABLE
+# REKONSILIASI
 # ==========================================
 expected_df = (
     stock_df.groupby(["Tanggal", "Lantai"])[
@@ -315,7 +342,7 @@ rekon_df["Selisih"] = (
 )
 
 # ==========================================
-# STATUS FLAG
+# STATUS
 # ==========================================
 def get_status(selisih):
 
@@ -334,12 +361,12 @@ rekon_df["Status"] = (
 )
 
 # ==========================================
-# CHART SECTION
+# CHARTS
 # ==========================================
 col_chart1, col_chart2 = st.columns(2)
 
 # ==========================================
-# EXPECTED VS QRIS
+# EXPECTED VS ACTUAL
 # ==========================================
 with col_chart1:
 
@@ -376,11 +403,11 @@ with col_chart1:
     )
 
 # ==========================================
-# TOP PRODUK
+# TOP PRODUCT
 # ==========================================
 with col_chart2:
 
-    st.subheader("🔥 Top Produk Terlaris")
+    st.subheader("🔥 Top 10 Produk Terlaris")
 
     top_produk = (
         stock_df.groupby("Nama Produk")[
@@ -450,7 +477,7 @@ st.dataframe(
 )
 
 # ==========================================
-# DOWNLOAD CSV
+# DOWNLOAD BUTTON
 # ==========================================
 csv = rekon_df.to_csv(index=False).encode("utf-8")
 

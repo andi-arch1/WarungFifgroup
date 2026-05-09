@@ -48,7 +48,7 @@ h1, h2, h3 {
 st.title("🛒 Dashboard Warung FIFGROUP")
 
 st.markdown("""
-Monitoring Penjualan Harian  
+Monitoring Penjualan Harian & Rekonsiliasi QRIS  
 📍 Warung FIFGROUP Lantai 3 • Lantai 8 • Lantai 9
 """)
 
@@ -57,7 +57,11 @@ st.divider()
 # ==========================================
 # FILE PATH
 # ==========================================
-file_path = "data/stock_harian.xlsx"
+stock_file = "data/stock_harian.xlsx"
+
+qris_lt3_file = "data/qris_lt3.csv"
+qris_lt8_file = "data/qris_lt8.csv"
+qris_lt9_file = "data/qris_lt9.csv"
 
 # ==========================================
 # CLEAN RUPIAH FUNCTION
@@ -72,7 +76,6 @@ def clean_rupiah(value):
 
     value = str(value)
 
-    # hapus semua selain angka
     value = re.sub(r"\D", "", value)
 
     if value == "":
@@ -81,11 +84,11 @@ def clean_rupiah(value):
     return int(value)
 
 # ==========================================
-# READ EXCEL
+# LOAD STOCK DATA
 # ==========================================
 try:
 
-    df = pd.read_excel(file_path)
+    stock_df = pd.read_excel(stock_file)
 
 except:
 
@@ -93,28 +96,99 @@ except:
     st.stop()
 
 # ==========================================
-# CLEAN COLUMN
+# CLEAN STOCK DATA
 # ==========================================
-df.columns = df.columns.str.strip()
+stock_df.columns = stock_df.columns.str.strip()
 
-# ==========================================
-# CLEAN DATA
-# ==========================================
-df["Harga Jual"] = (
-    df["Harga Jual"]
+stock_df["Harga Jual"] = (
+    stock_df["Harga Jual"]
     .apply(clean_rupiah)
 )
 
-df["Uang Seharusnya Dibayar"] = (
-    df["Uang Seharusnya Dibayar"]
+stock_df["Uang Seharusnya Dibayar"] = (
+    stock_df["Uang Seharusnya Dibayar"]
     .apply(clean_rupiah)
 )
 
 # ==========================================
-# LANTAI AS CATEGORICAL
+# FORMAT LANTAI
 # ==========================================
-df["Lantai"] = (
-    "Lantai " + df["Lantai"].astype(str)
+stock_df["Lantai"] = (
+    "Lantai " + stock_df["Lantai"].astype(str)
+)
+
+# ==========================================
+# FORMAT TANGGAL STOCK
+# ==========================================
+stock_df["Tanggal"] = pd.to_datetime(
+    stock_df["Tanggal"]
+).dt.date
+
+# ==========================================
+# LOAD QRIS CSV
+# ==========================================
+try:
+
+    lt3 = pd.read_csv(qris_lt3_file)
+    lt8 = pd.read_csv(qris_lt8_file)
+    lt9 = pd.read_csv(qris_lt9_file)
+
+except:
+
+    st.error("❌ File CSV QRIS tidak ditemukan")
+    st.stop()
+
+# ==========================================
+# MERCHANT MAPPING
+# ==========================================
+merchant_mapping = {
+    "Warung FIFGROUP 1": "Lantai 3",
+    "Warung FIFGROUP 2": "Lantai 8",
+    "Warung FIFGROUP 3": "Lantai 9"
+}
+
+# ==========================================
+# CONCAT QRIS
+# ==========================================
+qris_df = pd.concat(
+    [lt3, lt8, lt9],
+    ignore_index=True
+)
+
+# ==========================================
+# CLEAN QRIS COLUMN
+# ==========================================
+qris_df.columns = qris_df.columns.str.strip()
+
+# ==========================================
+# FILTER STATUS BERHASIL
+# ==========================================
+qris_df = qris_df[
+    qris_df["Status"] == "BERHASIL"
+]
+
+# ==========================================
+# FORMAT TANGGAL QRIS
+# ==========================================
+qris_df["Tanggal"] = pd.to_datetime(
+    qris_df["Tanggal Transaksi"],
+    dayfirst=True
+).dt.date
+
+# ==========================================
+# FORMAT NOMINAL
+# ==========================================
+qris_df["Total Terbayar"] = (
+    qris_df["Total Terbayar"]
+    .apply(clean_rupiah)
+)
+
+# ==========================================
+# MAPPING LANTAI
+# ==========================================
+qris_df["Lantai"] = (
+    qris_df["Nama Merchant"]
+    .map(merchant_mapping)
 )
 
 # ==========================================
@@ -142,74 +216,129 @@ with col_filter1:
 
 with col_filter2:
 
-    produk_filter = st.multiselect(
-        "Pilih Produk",
-        options=sorted(df["Nama Produk"].unique()),
-        default=sorted(df["Nama Produk"].unique())
+    tanggal_filter = st.multiselect(
+        "Pilih Tanggal",
+        options=sorted(stock_df["Tanggal"].unique()),
+        default=sorted(stock_df["Tanggal"].unique())
     )
 
 # ==========================================
 # FILTER DATA
 # ==========================================
-df = df[
-    (df["Lantai"].isin(lantai_filter)) &
-    (df["Nama Produk"].isin(produk_filter))
+stock_df = stock_df[
+    (stock_df["Lantai"].isin(lantai_filter)) &
+    (stock_df["Tanggal"].isin(tanggal_filter))
+]
+
+qris_df = qris_df[
+    (qris_df["Lantai"].isin(lantai_filter)) &
+    (qris_df["Tanggal"].isin(tanggal_filter))
 ]
 
 # ==========================================
 # KPI
 # ==========================================
-total_revenue = (
-    df["Uang Seharusnya Dibayar"]
+total_expected = (
+    stock_df["Uang Seharusnya Dibayar"]
     .sum()
+)
+
+total_qris = (
+    qris_df["Total Terbayar"]
+    .sum()
+)
+
+total_selisih = (
+    total_qris - total_expected
 )
 
 total_terjual = (
-    df["Terjual"]
+    stock_df["Terjual"]
     .sum()
-)
-
-total_produk = (
-    df["Nama Produk"]
-    .nunique()
-)
-
-warung_terlaris = (
-    df.groupby("Lantai")[
-        "Uang Seharusnya Dibayar"
-    ]
-    .sum()
-    .idxmax()
 )
 
 # ==========================================
 # KPI CARDS
 # ==========================================
-st.subheader("📌 Ringkasan Penjualan")
+st.subheader("📌 Ringkasan Rekonsiliasi")
 
 col1, col2, col3, col4 = st.columns(4)
 
 col1.metric(
-    "💰 Total Revenue",
-    f"Rp {total_revenue:,.0f}"
+    "💰 Expected Revenue",
+    f"Rp {total_expected:,.0f}"
 )
 
 col2.metric(
-    "📦 Total Produk Terjual",
-    f"{int(total_terjual)}"
+    "💳 Actual QRIS",
+    f"Rp {total_qris:,.0f}"
 )
 
 col3.metric(
-    "🛍️ Total Jenis Produk",
-    total_produk
+    "📦 Produk Terjual",
+    f"{int(total_terjual)}"
 )
 
 col4.metric(
-    "🏆 Warung Terlaris",
-    warung_terlaris
+    "⚠️ Selisih",
+    f"Rp {total_selisih:,.0f}"
 )
 
 st.divider()
+
+# ==========================================
+# REKONSILIASI TABLE
+# ==========================================
+expected_df = (
+    stock_df.groupby(["Tanggal", "Lantai"])[
+        "Uang Seharusnya Dibayar"
+    ]
+    .sum()
+    .reset_index()
+)
+
+actual_df = (
+    qris_df.groupby(["Tanggal", "Lantai"])[
+        "Total Terbayar"
+    ]
+    .sum()
+    .reset_index()
+)
+
+rekon_df = expected_df.merge(
+    actual_df,
+    on=["Tanggal", "Lantai"],
+    how="left"
+)
+
+rekon_df["Total Terbayar"] = (
+    rekon_df["Total Terbayar"]
+    .fillna(0)
+)
+
+rekon_df["Selisih"] = (
+    rekon_df["Total Terbayar"] -
+    rekon_df["Uang Seharusnya Dibayar"]
+)
+
+# ==========================================
+# STATUS FLAG
+# ==========================================
+def get_status(selisih):
+
+    if selisih == 0:
+        return "🟢 MATCH"
+
+    elif selisih < 0:
+        return "🔴 KURANG"
+
+    else:
+        return "🟡 LEBIH"
+
+rekon_df["Status"] = (
+    rekon_df["Selisih"]
+    .apply(get_status)
+)
 
 # ==========================================
 # CHART SECTION
@@ -217,33 +346,35 @@ st.divider()
 col_chart1, col_chart2 = st.columns(2)
 
 # ==========================================
-# REVENUE PER LANTAI
+# EXPECTED VS QRIS
 # ==========================================
 with col_chart1:
 
-    st.subheader("📈 Revenue per Lantai")
+    st.subheader("📈 Expected vs Actual QRIS")
 
-    lantai_chart = (
-        df.groupby("Lantai")[
-            "Uang Seharusnya Dibayar"
+    chart_df = (
+        rekon_df.groupby("Lantai")[
+            [
+                "Uang Seharusnya Dibayar",
+                "Total Terbayar"
+            ]
         ]
         .sum()
         .reset_index()
     )
 
     fig1 = px.bar(
-        lantai_chart,
+        chart_df,
         x="Lantai",
-        y="Uang Seharusnya Dibayar",
-        text_auto=True,
-        color="Lantai"
+        y=[
+            "Uang Seharusnya Dibayar",
+            "Total Terbayar"
+        ],
+        barmode="group"
     )
 
     fig1.update_layout(
-        height=450,
-        showlegend=False,
-        xaxis_title="Lantai",
-        yaxis_title="Revenue"
+        height=450
     )
 
     st.plotly_chart(
@@ -256,10 +387,10 @@ with col_chart1:
 # ==========================================
 with col_chart2:
 
-    st.subheader("🔥 Top 10 Produk Terlaris")
+    st.subheader("🔥 Top Produk Terlaris")
 
     top_produk = (
-        df.groupby("Nama Produk")[
+        stock_df.groupby("Nama Produk")[
             "Terjual"
         ]
         .sum()
@@ -280,9 +411,7 @@ with col_chart2:
     )
 
     fig2.update_layout(
-        height=450,
-        xaxis_title="Produk",
-        yaxis_title="Jumlah Terjual"
+        height=450
     )
 
     st.plotly_chart(
@@ -293,50 +422,36 @@ with col_chart2:
 st.divider()
 
 # ==========================================
-# REVENUE PER PRODUK
+# REKONSILIASI TABLE
 # ==========================================
-st.subheader("💸 Revenue per Produk")
+st.subheader("📋 Tabel Rekonsiliasi")
 
-revenue_produk = (
-    df.groupby("Nama Produk")[
-        "Uang Seharusnya Dibayar"
-    ]
-    .sum()
-    .reset_index()
-    .sort_values(
-        by="Uang Seharusnya Dibayar",
-        ascending=False
-    )
-)
-
-fig3 = px.bar(
-    revenue_produk,
-    x="Nama Produk",
-    y="Uang Seharusnya Dibayar",
-    text_auto=True,
-    color="Uang Seharusnya Dibayar"
-)
-
-fig3.update_layout(
-    height=500,
-    xaxis_title="Produk",
-    yaxis_title="Revenue"
-)
-
-st.plotly_chart(
-    fig3,
-    use_container_width=True
+st.dataframe(
+    rekon_df,
+    use_container_width=True,
+    hide_index=True
 )
 
 st.divider()
 
 # ==========================================
-# DETAIL TABLE
+# DETAIL STOCK
 # ==========================================
-st.subheader("📋 Detail Penjualan")
+st.subheader("📦 Detail Penjualan Stock")
 
 st.dataframe(
-    df,
+    stock_df,
+    use_container_width=True,
+    hide_index=True
+)
+
+# ==========================================
+# DETAIL QRIS
+# ==========================================
+st.subheader("💳 Detail Transaksi QRIS")
+
+st.dataframe(
+    qris_df,
     use_container_width=True,
     hide_index=True
 )
@@ -344,11 +459,11 @@ st.dataframe(
 # ==========================================
 # DOWNLOAD CSV
 # ==========================================
-csv = df.to_csv(index=False).encode("utf-8")
+csv = rekon_df.to_csv(index=False).encode("utf-8")
 
 st.download_button(
-    label="⬇️ Download CSV",
+    label="⬇️ Download Rekonsiliasi CSV",
     data=csv,
-    file_name="dashboard_warung_fifgroup.csv",
+    file_name="rekonsiliasi_warung_fifgroup.csv",
     mime="text/csv"
 )

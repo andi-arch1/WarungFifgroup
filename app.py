@@ -59,12 +59,9 @@ st.divider()
 # ==========================================
 stock_file = "data/stock_harian.xlsx"
 
-# ==========================================
-# LOAD QRIS FILE
-# ==========================================
-qris_lt3_file = "data/qris_lt3.xlsx"
-qris_lt8_file = "data/qris_lt8.xlsx"
-qris_lt9_file = "data/qris_lt9.xlsx"
+qris_lt3_file = "data/qris_lt3.csv"
+qris_lt8_file = "data/qris_lt8.csv"
+qris_lt9_file = "data/qris_lt9.csv"
 
 # ==========================================
 # CLEAN RUPIAH FUNCTION
@@ -93,9 +90,9 @@ try:
 
     stock_df = pd.read_excel(stock_file)
 
-except:
+except Exception as e:
 
-    st.error("❌ File stock_harian.xlsx tidak ditemukan")
+    st.error(f"❌ Error membaca stock file: {e}")
     st.stop()
 
 # ==========================================
@@ -124,7 +121,8 @@ stock_df["Lantai"] = (
 # FORMAT TANGGAL
 # ==========================================
 stock_df["Tanggal"] = pd.to_datetime(
-    stock_df["Tanggal"]
+    stock_df["Tanggal"],
+    errors="coerce"
 ).dt.date
 
 # ==========================================
@@ -134,22 +132,25 @@ try:
 
     lt3 = pd.read_csv(
         qris_lt3_file,
-        encoding="utf-8-sig"
+        encoding="utf-8-sig",
+        sep=";"
     )
 
     lt8 = pd.read_csv(
         qris_lt8_file,
-        encoding="utf-8-sig"
+        encoding="utf-8-sig",
+        sep=";"
     )
 
     lt9 = pd.read_csv(
         qris_lt9_file,
-        encoding="utf-8-sig"
+        encoding="utf-8-sig",
+        sep=";"
     )
 
-except:
+except Exception as e:
 
-    st.error("❌ File CSV QRIS tidak ditemukan")
+    st.error(f"❌ Error membaca CSV QRIS: {e}")
     st.stop()
 
 # ==========================================
@@ -167,18 +168,21 @@ qris_df.columns = (
     qris_df.columns
     .str.strip()
     .str.replace("\ufeff", "")
-    .str.replace("\n", " ")
-    .str.replace("\r", " ")
 )
 
 # ==========================================
-# RENAME COLUMNS
+# CLEAN QRIS DATA
 # ==========================================
-qris_df = qris_df.rename(columns={
-    qris_df.columns[0]: "Nama Merchant",
-    qris_df.columns[1]: "Tanggal Transaksi",
-    qris_df.columns[6]: "Total Terbayar"
-})
+qris_df["Tanggal"] = pd.to_datetime(
+    qris_df["Tanggal Transaksi"],
+    dayfirst=True,
+    errors="coerce"
+).dt.date
+
+qris_df["Total Terbayar"] = (
+    qris_df["Total Terbayar"]
+    .apply(clean_rupiah)
+)
 
 # ==========================================
 # MERCHANT MAPPING
@@ -189,26 +193,6 @@ merchant_mapping = {
     "Warung FIFGROUP 3": "Lantai 9"
 }
 
-# ==========================================
-# FORMAT TANGGAL QRIS
-# ==========================================
-qris_df["Tanggal"] = pd.to_datetime(
-    qris_df["Tanggal Transaksi"],
-    dayfirst=True,
-    errors="coerce"
-).dt.date
-
-# ==========================================
-# CLEAN TOTAL TERBAYAR
-# ==========================================
-qris_df["Total Terbayar"] = (
-    qris_df["Total Terbayar"]
-    .apply(clean_rupiah)
-)
-
-# ==========================================
-# MAP LANTAI
-# ==========================================
 qris_df["Lantai"] = (
     qris_df["Nama Merchant"]
     .map(merchant_mapping)
@@ -241,8 +225,16 @@ with col_filter2:
 
     tanggal_filter = st.multiselect(
         "Pilih Tanggal",
-        options=sorted(stock_df["Tanggal"].dropna().unique()),
-        default=sorted(stock_df["Tanggal"].dropna().unique())
+        options=sorted(
+            stock_df["Tanggal"]
+            .dropna()
+            .unique()
+        ),
+        default=sorted(
+            stock_df["Tanggal"]
+            .dropna()
+            .unique()
+        )
     )
 
 # ==========================================
@@ -364,7 +356,7 @@ rekon_df["Status"] = (
 )
 
 # ==========================================
-# CHARTS
+# CHART SECTION
 # ==========================================
 col_chart1, col_chart2 = st.columns(2)
 
@@ -406,7 +398,7 @@ with col_chart1:
     )
 
 # ==========================================
-# TOP PRODUCT
+# TOP PRODUK
 # ==========================================
 with col_chart2:
 
@@ -480,7 +472,7 @@ st.dataframe(
 )
 
 # ==========================================
-# DOWNLOAD BUTTON
+# DOWNLOAD CSV
 # ==========================================
 csv = rekon_df.to_csv(index=False).encode("utf-8")
 

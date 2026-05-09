@@ -64,11 +64,11 @@ stock_file = "data/stock_harian.xlsx"
 # ==========================================
 try:
 
-    lt3 = pd.read_excel("data/qris_lt3")
+    lt3 = pd.read_excel(qris_lt3)
 
-    lt8 = pd.read_excel("data/qris_lt8")
+    lt8 = pd.read_excel(qris_lt8)
 
-    lt9 = pd.read_excel("data/qris_lt9")
+    lt9 = pd.read_excel(qris_lt9)
 
 except Exception as e:
 

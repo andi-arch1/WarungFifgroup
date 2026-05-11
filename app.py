@@ -444,7 +444,21 @@ st.subheader("📋 Tabel Rekonsiliasi")
 st.dataframe(
     rekon_df,
     use_container_width=True,
-    hide_index=True
+    hide_index=True,
+    column_config={
+        "Uang Seharusnya Dibayar": st.column_config.NumberColumn(
+            "Uang Seharusnya Dibayar",
+            format="Rp %d"
+        ),
+        "Total Terbayar": st.column_config.NumberColumn(
+            "Total Terbayar",
+            format="Rp %d"
+        ),
+        "Selisih": st.column_config.NumberColumn(
+            "Selisih",
+            format="Rp %d"
+        ),
+    }
 )
 
 st.divider()
@@ -468,7 +482,25 @@ st.subheader("💳 Detail Transaksi QRIS")
 st.dataframe(
     qris_df,
     use_container_width=True,
-    hide_index=True
+    hide_index=True,
+    column_config={
+        "Nominal Transaksi": st.column_config.NumberColumn(
+            "Nominal Transaksi",
+            format="Rp %d"
+        ),
+        "Harga": st.column_config.NumberColumn(
+            "Harga",
+            format="Rp %d"
+        ),
+        "Total Terbayar": st.column_config.NumberColumn(
+            "Total Terbayar",
+            format="Rp %d"
+        ),
+        "MDR": st.column_config.NumberColumn(
+            "MDR",
+            format="Rp %d"
+        ),
+    }
 )
 
 # ==========================================

@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import re
+from io import BytesIO
 
 # ==========================================
 # PAGE CONFIG
@@ -48,7 +49,7 @@ h1, h2, h3 {
 st.title("🛒 Dashboard Warung FIFGROUP")
 
 st.markdown("""
-Monitoring Penjualan Harian & Rekonsiliasi QRIS  
+Monitoring Penjualan Harian, Rekonsiliasi QRIS, dan Cek Standar Display  
 📍 Warung FIFGROUP Lantai 3 • Lantai 8 • Lantai 9
 """)
 
@@ -57,11 +58,12 @@ st.divider()
 # ==========================================
 # FILE PATH
 # ==========================================
+master_file = "data/master_data.xlsx"
 stock_file = "data/stock_harian.xlsx"
 qris_file = "data/qris_all.xlsx"
 
 # ==========================================
-# CLEAN RUPIAH FUNCTION
+# HELPER FUNCTIONS
 # ==========================================
 def clean_rupiah(value):
     if pd.isna(value):
@@ -77,6 +79,144 @@ def clean_rupiah(value):
         return 0
 
     return int(value)
+
+
+def format_lantai(value):
+    if pd.isna(value):
+        return None
+
+    value = str(value).strip()
+
+    mapping = {
+        "3": "Lantai 3",
+        "8": "Lantai 8",
+        "9": "Lantai 9",
+        "Lantai 3": "Lantai 3",
+        "Lantai 8": "Lantai 8",
+        "Lantai 9": "Lantai 9",
+        "LT 3": "Lantai 3",
+        "LT 8": "Lantai 8",
+        "LT 9": "Lantai 9",
+        "Lt 3": "Lantai 3",
+        "Lt 8": "Lantai 8",
+        "Lt 9": "Lantai 9"
+    }
+
+    return mapping.get(value, value)
+
+
+def get_display_status(row):
+    standar = row["Standar Display"]
+    actual = row["Actual"]
+
+    if pd.isna(actual):
+        return "🔴 Belum Input Actual"
+
+    if actual == standar:
+        return "🟢 Sesuai Standar"
+
+    elif actual < standar:
+        return "🟡 Kurang dari Standar"
+
+    else:
+        return "🔵 Lebih dari Standar"
+
+
+def get_rekon_status(selisih):
+    if selisih == 0:
+        return "🟢 MATCH"
+    elif selisih < 0:
+        return "🔴 KURANG"
+    else:
+        return "🟡 LEBIH"
+
+
+# ==========================================
+# LOAD MASTER DATA
+# ==========================================
+try:
+    master_df = pd.read_excel(master_file)
+
+except Exception as e:
+    st.error(f"❌ Error membaca master data: {e}")
+    st.stop()
+
+# ==========================================
+# CLEAN MASTER COLUMNS
+# ==========================================
+master_df.columns = (
+    master_df.columns
+    .str.strip()
+    .str.replace("\ufeff", "")
+)
+
+# Samakan nama kolom produk
+if "Produk" in master_df.columns and "Nama Produk" not in master_df.columns:
+    master_df = master_df.rename(columns={"Produk": "Nama Produk"})
+
+# Samakan nama kolom jumlah standar
+if "Jumlah" in master_df.columns and "Standar Display" not in master_df.columns:
+    master_df = master_df.rename(columns={"Jumlah": "Standar Display"})
+
+# ==========================================
+# VALIDATE MASTER COLUMNS
+# ==========================================
+required_master_cols = [
+    "Tanggal",
+    "Nama Produk",
+    "Standar Display",
+    "Actual"
+]
+
+missing_master_cols = [
+    col for col in required_master_cols
+    if col not in master_df.columns
+]
+
+if missing_master_cols:
+    st.error(f"❌ Kolom master data tidak ditemukan: {missing_master_cols}")
+    st.info("Pastikan master_data.xlsx punya kolom: Tanggal, Produk/Jenis Produk, Jumlah, Actual.")
+    st.stop()
+
+# ==========================================
+# CLEAN MASTER DATA
+# ==========================================
+master_df["Tanggal"] = pd.to_datetime(
+    master_df["Tanggal"],
+    errors="coerce",
+    dayfirst=True
+).dt.date
+
+master_df["Nama Produk"] = master_df["Nama Produk"].astype(str).str.strip()
+
+master_df["Standar Display"] = pd.to_numeric(
+    master_df["Standar Display"],
+    errors="coerce"
+).fillna(0)
+
+master_df["Actual"] = pd.to_numeric(
+    master_df["Actual"],
+    errors="coerce"
+)
+
+# Kalau master punya kolom Lantai, ikut dipakai
+if "Lantai" in master_df.columns:
+    master_df["Lantai"] = master_df["Lantai"].apply(format_lantai)
+
+# Notes optional
+if "Notes" not in master_df.columns:
+    master_df["Notes"] = ""
+
+# Hitung selisih display
+master_df["Selisih Display"] = (
+    master_df["Actual"].fillna(0) -
+    master_df["Standar Display"]
+)
+
+master_df["Status Display"] = master_df.apply(
+    get_display_status,
+    axis=1
+)
 
 # ==========================================
 # LOAD STOCK DATA
@@ -116,32 +256,28 @@ missing_stock_cols = [
 
 if missing_stock_cols:
     st.error(f"❌ Kolom stock tidak ditemukan: {missing_stock_cols}")
+    st.info("Pastikan stock_harian.xlsx punya kolom: Tanggal, Lantai, Nama Produk, Harga Jual, Terjual, Uang Seharusnya Dibayar.")
     st.stop()
 
 # ==========================================
 # CLEAN STOCK DATA
 # ==========================================
-stock_df["Harga Jual"] = stock_df["Harga Jual"].apply(clean_rupiah)
-stock_df["Uang Seharusnya Dibayar"] = stock_df["Uang Seharusnya Dibayar"].apply(clean_rupiah)
-stock_df["Terjual"] = pd.to_numeric(stock_df["Terjual"], errors="coerce").fillna(0)
-
-# Format Lantai
-stock_df["Lantai"] = stock_df["Lantai"].astype(str).str.strip()
-
-stock_df["Lantai"] = stock_df["Lantai"].replace({
-    "3": "Lantai 3",
-    "8": "Lantai 8",
-    "9": "Lantai 9",
-    "Lantai 3": "Lantai 3",
-    "Lantai 8": "Lantai 8",
-    "Lantai 9": "Lantai 9"
-})
-
-# Format Tanggal
 stock_df["Tanggal"] = pd.to_datetime(
     stock_df["Tanggal"],
-    errors="coerce"
+    errors="coerce",
+    dayfirst=True
 ).dt.date
+
+stock_df["Nama Produk"] = stock_df["Nama Produk"].astype(str).str.strip()
+stock_df["Lantai"] = stock_df["Lantai"].apply(format_lantai)
+
+stock_df["Harga Jual"] = stock_df["Harga Jual"].apply(clean_rupiah)
+stock_df["Uang Seharusnya Dibayar"] = stock_df["Uang Seharusnya Dibayar"].apply(clean_rupiah)
+
+stock_df["Terjual"] = pd.to_numeric(
+    stock_df["Terjual"],
+    errors="coerce"
+).fillna(0)
 
 # ==========================================
 # LOAD QRIS EXCEL
@@ -178,6 +314,7 @@ missing_qris_cols = [
 
 if missing_qris_cols:
     st.error(f"❌ Kolom QRIS tidak ditemukan: {missing_qris_cols}")
+    st.info("Pastikan qris_all.xlsx punya kolom: Nama Merchant, Tanggal Transaksi, Total Terbayar.")
     st.stop()
 
 # ==========================================
@@ -185,7 +322,8 @@ if missing_qris_cols:
 # ==========================================
 qris_df["Tanggal"] = pd.to_datetime(
     qris_df["Tanggal Transaksi"],
-    errors="coerce"
+    errors="coerce",
+    dayfirst=True
 ).dt.date
 
 qris_money_cols = [
@@ -210,11 +348,13 @@ merchant_mapping = {
 }
 
 qris_df["Nama Merchant"] = qris_df["Nama Merchant"].astype(str).str.strip()
-
 qris_df["Lantai"] = qris_df["Nama Merchant"].map(merchant_mapping)
 
-# Kalau ada merchant yang tidak kebaca
-unknown_merchants = qris_df[qris_df["Lantai"].isna()]["Nama Merchant"].dropna().unique()
+unknown_merchants = (
+    qris_df[qris_df["Lantai"].isna()]["Nama Merchant"]
+    .dropna()
+    .unique()
+)
 
 if len(unknown_merchants) > 0:
     st.warning(f"⚠️ Ada Nama Merchant yang belum dimapping: {list(unknown_merchants)}")
@@ -224,19 +364,21 @@ if len(unknown_merchants) > 0:
 # ==========================================
 st.subheader("🔍 Filter Dashboard")
 
-col_filter1, col_filter2 = st.columns(2)
-
 available_lantai = [
     "Lantai 3",
     "Lantai 8",
     "Lantai 9"
 ]
 
-available_tanggal = sorted(
-    stock_df["Tanggal"]
-    .dropna()
-    .unique()
+all_dates = pd.Series(
+    list(master_df["Tanggal"].dropna().unique()) +
+    list(stock_df["Tanggal"].dropna().unique()) +
+    list(qris_df["Tanggal"].dropna().unique())
 )
+
+available_tanggal = sorted(all_dates.dropna().unique())
+
+col_filter1, col_filter2 = st.columns(2)
 
 with col_filter1:
     lantai_filter = st.multiselect(
@@ -265,17 +407,23 @@ filtered_qris_df = qris_df[
     (qris_df["Tanggal"].isin(tanggal_filter))
 ].copy()
 
+filtered_master_df = master_df[
+    master_df["Tanggal"].isin(tanggal_filter)
+].copy()
+
+if "Lantai" in filtered_master_df.columns:
+    filtered_master_df = filtered_master_df[
+        filtered_master_df["Lantai"].isin(lantai_filter)
+    ].copy()
+
 # ==========================================
-# KPI
+# KPI REKONSILIASI
 # ==========================================
 total_expected = filtered_stock_df["Uang Seharusnya Dibayar"].sum()
 total_qris = filtered_qris_df["Total Terbayar"].sum()
 total_selisih = total_qris - total_expected
 total_terjual = filtered_stock_df["Terjual"].sum()
 
-# ==========================================
-# KPI CARDS
-# ==========================================
 st.subheader("📌 Ringkasan Rekonsiliasi")
 
 col1, col2, col3, col4 = st.columns(4)
@@ -303,7 +451,37 @@ col4.metric(
 st.divider()
 
 # ==========================================
-# REKONSILIASI
+# KPI MASTER DISPLAY
+# ==========================================
+st.subheader("🧾 Ringkasan Standar Display")
+
+total_item_master = len(filtered_master_df)
+
+total_sesuai = (
+    filtered_master_df["Status Display"]
+    .eq("🟢 Sesuai Standar")
+    .sum()
+)
+
+total_belum_input = (
+    filtered_master_df["Status Display"]
+    .eq("🔴 Belum Input Actual")
+    .sum()
+)
+
+total_tidak_sesuai = total_item_master - total_sesuai - total_belum_input
+
+col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+
+col_m1.metric("📋 Total Item Master", total_item_master)
+col_m2.metric("✅ Sesuai Standar", total_sesuai)
+col_m3.metric("⚠️ Tidak Sesuai", total_tidak_sesuai)
+col_m4.metric("📝 Belum Input Actual", total_belum_input)
+
+st.divider()
+
+# ==========================================
+# REKONSILIASI DATA
 # ==========================================
 expected_df = (
     filtered_stock_df
@@ -332,18 +510,7 @@ rekon_df["Selisih"] = (
     rekon_df["Uang Seharusnya Dibayar"]
 )
 
-# ==========================================
-# STATUS
-# ==========================================
-def get_status(selisih):
-    if selisih == 0:
-        return "🟢 MATCH"
-    elif selisih < 0:
-        return "🔴 KURANG"
-    else:
-        return "🟡 LEBIH"
-
-rekon_df["Status"] = rekon_df["Selisih"].apply(get_status)
+rekon_df["Status"] = rekon_df["Selisih"].apply(get_rekon_status)
 
 rekon_df = rekon_df.sort_values(
     by=["Tanggal", "Lantai"],
@@ -436,14 +603,47 @@ with col_chart2:
 st.divider()
 
 # ==========================================
-# DATA SELISIH
+# CHART DISPLAY STATUS
 # ==========================================
-st.subheader("🚨 Data Selisih Tidak Match")
+st.subheader("📊 Status Standar Display")
+
+display_status_df = (
+    filtered_master_df
+    .groupby("Status Display")
+    .size()
+    .reset_index(name="Jumlah")
+)
+
+if display_status_df.empty:
+    st.info("Belum ada data master display untuk filter ini.")
+else:
+    fig_display = px.bar(
+        display_status_df,
+        x="Status Display",
+        y="Jumlah",
+        text_auto=True
+    )
+
+    fig_display.update_layout(
+        height=400
+    )
+
+    st.plotly_chart(
+        fig_display,
+        use_container_width=True
+    )
+
+st.divider()
+
+# ==========================================
+# DATA SELISIH REKONSILIASI
+# ==========================================
+st.subheader("🚨 Data Selisih Rekonsiliasi Tidak Match")
 
 selisih_df = rekon_df[rekon_df["Selisih"] != 0].copy()
 
 if selisih_df.empty:
-    st.success("✅ Semua data sudah MATCH.")
+    st.success("✅ Semua data rekonsiliasi sudah MATCH.")
 else:
     st.dataframe(
         selisih_df,
@@ -461,6 +661,61 @@ else:
             "Selisih": st.column_config.NumberColumn(
                 "Selisih",
                 format="Rp %d"
+            ),
+        }
+    )
+
+st.divider()
+
+# ==========================================
+# MASTER DISPLAY CHECK TABLE
+# ==========================================
+st.subheader("🧾 Cek Actual vs Standar Display")
+
+problem_display_df = filtered_master_df[
+    filtered_master_df["Status Display"] != "🟢 Sesuai Standar"
+].copy()
+
+if problem_display_df.empty:
+    st.success("✅ Semua stock actual sudah sesuai standar display.")
+else:
+    st.dataframe(
+        problem_display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Standar Display": st.column_config.NumberColumn(
+                "Standar Display",
+                format="%d"
+            ),
+            "Actual": st.column_config.NumberColumn(
+                "Actual",
+                format="%d"
+            ),
+            "Selisih Display": st.column_config.NumberColumn(
+                "Selisih Display",
+                format="%d"
+            ),
+        }
+    )
+
+with st.expander("Lihat Semua Data Master Display"):
+    st.dataframe(
+        filtered_master_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Standar Display": st.column_config.NumberColumn(
+                "Standar Display",
+                format="%d"
+            ),
+            "Actual": st.column_config.NumberColumn(
+                "Actual",
+                format="%d"
+            ),
+            "Selisih Display": st.column_config.NumberColumn(
+                "Selisih Display",
+                format="%d"
             ),
         }
     )
@@ -555,41 +810,50 @@ st.download_button(
 # ==========================================
 # DOWNLOAD EXCEL
 # ==========================================
-output_excel = pd.ExcelWriter(
-    "rekonsiliasi_warung_fifgroup.xlsx",
-    engine="openpyxl"
-)
+excel_buffer = BytesIO()
 
-rekon_df.to_excel(
-    output_excel,
-    sheet_name="Rekonsiliasi",
-    index=False
-)
-
-selisih_df.to_excel(
-    output_excel,
-    sheet_name="Data Selisih",
-    index=False
-)
-
-filtered_stock_df.to_excel(
-    output_excel,
-    sheet_name="Detail Stock",
-    index=False
-)
-
-filtered_qris_df.to_excel(
-    output_excel,
-    sheet_name="Detail QRIS",
-    index=False
-)
-
-output_excel.close()
-
-with open("rekonsiliasi_warung_fifgroup.xlsx", "rb") as file:
-    st.download_button(
-        label="⬇️ Download Rekonsiliasi Excel",
-        data=file,
-        file_name="rekonsiliasi_warung_fifgroup.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+    rekon_df.to_excel(
+        writer,
+        sheet_name="Rekonsiliasi",
+        index=False
     )
+
+    selisih_df.to_excel(
+        writer,
+        sheet_name="Data Selisih Rekon",
+        index=False
+    )
+
+    filtered_master_df.to_excel(
+        writer,
+        sheet_name="Master Display",
+        index=False
+    )
+
+    problem_display_df.to_excel(
+        writer,
+        sheet_name="Display Tidak Sesuai",
+        index=False
+    )
+
+    filtered_stock_df.to_excel(
+        writer,
+        sheet_name="Detail Stock",
+        index=False
+    )
+
+    filtered_qris_df.to_excel(
+        writer,
+        sheet_name="Detail QRIS",
+        index=False
+    )
+
+excel_buffer.seek(0)
+
+st.download_button(
+    label="⬇️ Download Rekonsiliasi Excel",
+    data=excel_buffer,
+    file_name="rekonsiliasi_warung_fifgroup.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)

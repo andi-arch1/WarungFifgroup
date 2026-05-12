@@ -337,7 +337,7 @@ missing_stock_cols = [
 
 if missing_stock_cols:
     st.error(f"❌ Kolom stock tidak ditemukan: {missing_stock_cols}")
-    st.info("Pastikan stock_harian.xlsx punya kolom: Tanggal, Lantai, Nama Produk, Harga Jual, Terjual, Uang Seharusnya Dibayar.")
+    st.info("Pastikan stock_harian.xlsx punya kolom: Tanggal, Lantai, Nama Produk, HargaJual, Terjual, Uang Seharusnya Dibayar.")
     st.stop()
 
 # ==========================================
@@ -357,7 +357,7 @@ stock_df["Nama Produk"] = (
 
 stock_df["Lantai"] = stock_df["Lantai"].apply(format_lantai)
 
-stock_df["Harga Jual"] = stock_df["Harga Jual"].apply(clean_rupiah)
+stock_df["HargaJual"] = stock_df["HargaJual"].apply(clean_rupiah)
 
 stock_df["Uang Seharusnya Dibayar"] = (
     stock_df["Uang Seharusnya Dibayar"]
@@ -914,8 +914,8 @@ st.dataframe(
     use_container_width=True,
     hide_index=True,
     column_config={
-        "Harga Jual": st.column_config.NumberColumn(
-            "Harga Jual",
+        "HargaJual": st.column_config.NumberColumn(
+            "HargaJual",
             format="Rp %d"
         ),
         "Uang Seharusnya Dibayar": st.column_config.NumberColumn(

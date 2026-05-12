@@ -191,30 +191,24 @@ for sheet_name, df in master_sheets.items():
 
     rename_cols = {}
 
-    # Produk -> Nama Produk
     if "Produk" in df.columns and "Nama Produk" not in df.columns:
         rename_cols["Produk"] = "Nama Produk"
 
-    # Product -> Nama Produk
     for col in df.columns:
         if col.lower() == "product" and "Nama Produk" not in df.columns:
             rename_cols[col] = "Nama Produk"
 
-    # Standar Display -> Jumlah
     if "Standar Display" in df.columns and "Jumlah" not in df.columns:
         rename_cols["Standar Display"] = "Jumlah"
 
-    # Qty -> Jumlah
     if "Qty" in df.columns and "Jumlah" not in df.columns:
         rename_cols["Qty"] = "Jumlah"
 
-    # Stock Display -> Display
     if "Stock Display" in df.columns and "Display" not in df.columns:
         rename_cols["Stock Display"] = "Display"
 
     df = df.rename(columns=rename_cols)
 
-    # Kalau tidak ada kolom Lantai, ambil dari nama sheet
     if "Lantai" not in df.columns and "lantai" not in df.columns:
         df["Lantai"] = lantai_from_sheet_name(sheet_name)
 
@@ -295,13 +289,11 @@ if "Display" in master_df.columns:
 else:
     master_df["Display"] = master_df["Jumlah"] - master_df["Actual"]
 
-# Restock dibutuhkan = Jumlah - Display
 master_df["Restock Dibutuhkan"] = (
     master_df["Jumlah"] -
     master_df["Display"]
 )
 
-# Kalau display lebih besar dari jumlah, tidak perlu restock
 master_df.loc[
     master_df["Restock Dibutuhkan"] < 0,
     "Restock Dibutuhkan"
@@ -342,7 +334,7 @@ required_stock_cols = [
     "Tanggal",
     "Lantai",
     "Nama Produk",
-    "HargaJual",
+    "Harga Jual",
     "Terjual",
     "Uang Seharusnya Dibayar"
 ]
@@ -356,7 +348,7 @@ if missing_stock_cols:
     st.error(f"❌ Kolom stock tidak ditemukan: {missing_stock_cols}")
     st.info(
         "Pastikan stock_harian.xlsx punya kolom: "
-        "Tanggal, Lantai, Nama Produk, HargaJual, Terjual, Uang Seharusnya Dibayar."
+        "Tanggal, Lantai, Nama Produk, Harga Jual, Terjual, Uang Seharusnya Dibayar."
     )
     st.stop()
 
@@ -377,7 +369,7 @@ stock_df["Nama Produk"] = (
 
 stock_df["Lantai"] = stock_df["Lantai"].apply(format_lantai)
 
-stock_df["HargaJual"] = stock_df["HargaJual"].apply(clean_rupiah)
+stock_df["Harga Jual"] = stock_df["Harga Jual"].apply(clean_rupiah)
 
 stock_df["Uang Seharusnya Dibayar"] = (
     stock_df["Uang Seharusnya Dibayar"]
@@ -562,29 +554,89 @@ filtered_qris_df = qris_df[
 ].copy()
 
 # ==========================================
-# STOCK COMPLIANCE SUMMARY PER LANTAI
+# STOCK SUMMARY PER LANTAI
 # ==========================================
 if stock_compliance_available and not filtered_stock_df.empty:
 
-    stock_flag_lantai_df = (
+    stock_summary_lantai_df = (
         filtered_stock_df
-        .groupby(["Tanggal", "Lantai"])
+        .groupby("Lantai")
         .agg(
             Total_Item=("Nama Produk", "count"),
-            Item_Tidak_Patuh=("Status Stock", lambda x: (x == "🔴 Tidak Patuh").sum()),
-            Total_Selisih_Stock=("Selisih Stock", "sum")
+            Item_Selisih_Stock=("Status Stock", lambda x: (x == "🔴 Tidak Patuh").sum()),
+            Total_Selisih_Stock=("Selisih Stock", lambda x: x.abs().sum())
         )
         .reset_index()
     )
 
-    stock_flag_lantai_df["Status Kepatuhan Stock"] = stock_flag_lantai_df[
-        "Item_Tidak_Patuh"
+    stock_summary_lantai_df["Status Kepatuhan Stock"] = stock_summary_lantai_df[
+        "Item_Selisih_Stock"
     ].apply(
         lambda x: "🟢 Patuh" if x == 0 else "🔴 Tidak Patuh"
     )
 
+    lantai_order = {
+        "Lantai 3": 1,
+        "Lantai 8": 2,
+        "Lantai 9": 3
+    }
+
+    stock_summary_lantai_df["Urutan"] = stock_summary_lantai_df["Lantai"].map(lantai_order)
+
+    stock_summary_lantai_df = (
+        stock_summary_lantai_df
+        .sort_values("Urutan")
+        .drop(columns=["Urutan"])
+    )
+
 else:
-    stock_flag_lantai_df = pd.DataFrame()
+    stock_summary_lantai_df = pd.DataFrame()
+
+# ==========================================
+# DISPLAY SUMMARY PER LANTAI
+# ==========================================
+if not filtered_master_df.empty:
+
+    display_summary_lantai_df = (
+        filtered_master_df
+        .groupby("Lantai")
+        .agg(
+            Total_Item_Master=("Nama Produk", "count"),
+            Sesuai_Standar=("Status Display", lambda x: (x == "🟢 Sesuai Standar").sum()),
+            Perlu_Restock=("Status Display", lambda x: (x == "🟡 Perlu Restock").sum()),
+            Display_Negatif=("Status Display", lambda x: (x == "🔴 Display Negatif").sum()),
+            Total_Qty_Restock=("Restock Dibutuhkan", "sum")
+        )
+        .reset_index()
+    )
+
+    display_summary_lantai_df["Status Standar Display"] = display_summary_lantai_df.apply(
+        lambda row: (
+            "🔴 Ada Display Negatif"
+            if row["Display_Negatif"] > 0
+            else "🟡 Perlu Restock"
+            if row["Perlu_Restock"] > 0
+            else "🟢 Sesuai Standar"
+        ),
+        axis=1
+    )
+
+    lantai_order = {
+        "Lantai 3": 1,
+        "Lantai 8": 2,
+        "Lantai 9": 3
+    }
+
+    display_summary_lantai_df["Urutan"] = display_summary_lantai_df["Lantai"].map(lantai_order)
+
+    display_summary_lantai_df = (
+        display_summary_lantai_df
+        .sort_values("Urutan")
+        .drop(columns=["Urutan"])
+    )
+
+else:
+    display_summary_lantai_df = pd.DataFrame()
 
 # ==========================================
 # KPI REKONSILIASI
@@ -621,45 +673,10 @@ col4.metric(
 st.divider()
 
 # ==========================================
-# KPI KEPATUHAN STOCK
-# ==========================================
-# ==========================================
-# KPI KEPATUHAN STOCK PER LANTAI
+# RINGKASAN KEPATUHAN STOCK PER LANTAI
 # ==========================================
 if stock_compliance_available:
     st.subheader("🧮 Ringkasan Kepatuhan Stock per Lantai")
-
-    stock_summary_lantai_df = (
-        filtered_stock_df
-        .groupby("Lantai")
-        .agg(
-            Total_Item=("Nama Produk", "count"),
-            Item_Selisih_Stock=("Status Stock", lambda x: (x == "🔴 Tidak Patuh").sum()),
-            Total_Selisih_Stock=("Selisih Stock", "sum")
-        )
-        .reset_index()
-    )
-
-    stock_summary_lantai_df["Status Kepatuhan Stock"] = stock_summary_lantai_df[
-        "Item_Selisih_Stock"
-    ].apply(
-        lambda x: "🟢 Patuh" if x == 0 else "🔴 Tidak Patuh"
-    )
-
-    # Urutkan lantai biar tampil 3, 8, 9
-    lantai_order = {
-        "Lantai 3": 1,
-        "Lantai 8": 2,
-        "Lantai 9": 3
-    }
-
-    stock_summary_lantai_df["Urutan"] = stock_summary_lantai_df["Lantai"].map(lantai_order)
-
-    stock_summary_lantai_df = (
-        stock_summary_lantai_df
-        .sort_values("Urutan")
-        .drop(columns=["Urutan"])
-    )
 
     col_l3, col_l8, col_l9 = st.columns(3)
 
@@ -683,116 +700,127 @@ if stock_compliance_available:
 
             col.metric(
                 f"🏢 {lantai}",
-                status,
+                status.replace("🔴 ", "").replace("🟢 ", ""),
                 f"{item_selisih} item selisih | Total selisih: {total_selisih}"
             )
 
-    st.dataframe(
-        stock_summary_lantai_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Total_Item": st.column_config.NumberColumn(
-                "Total Item",
-                format="%d"
-            ),
-            "Item_Selisih_Stock": st.column_config.NumberColumn(
-                "Item Selisih Stock",
-                format="%d"
-            ),
-            "Total_Selisih_Stock": st.column_config.NumberColumn(
-                "Total Selisih Stock",
-                format="%d"
-            ),
-        }
-    )
+    if stock_summary_lantai_df.empty:
+        st.info("Belum ada data kepatuhan stock untuk filter ini.")
+    else:
+        st.dataframe(
+            stock_summary_lantai_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Total_Item": st.column_config.NumberColumn(
+                    "Total Item",
+                    format="%d"
+                ),
+                "Item_Selisih_Stock": st.column_config.NumberColumn(
+                    "Item Selisih Stock",
+                    format="%d"
+                ),
+                "Total_Selisih_Stock": st.column_config.NumberColumn(
+                    "Total Selisih Stock",
+                    format="%d"
+                ),
+            }
+        )
 
     st.divider()
 
 # ==========================================
-# KPI MASTER DISPLAY
+# DETAIL STOCK TIDAK PATUH PER LANTAI
 # ==========================================
-st.subheader("🧾 Ringkasan Standar Display")
+if stock_compliance_available:
+    st.subheader("🔎 Detail Stock Tidak Patuh per Lantai")
 
-total_item_master = len(filtered_master_df)
+    tab_stock_l3, tab_stock_l8, tab_stock_l9 = st.tabs([
+        "🏢 Lantai 3",
+        "🏢 Lantai 8",
+        "🏢 Lantai 9"
+    ])
 
-total_sesuai = (
-    filtered_master_df["Status Display"]
-    .eq("🟢 Sesuai Standar")
-    .sum()
-)
+    stock_tabs = {
+        "Lantai 3": tab_stock_l3,
+        "Lantai 8": tab_stock_l8,
+        "Lantai 9": tab_stock_l9
+    }
 
-total_perlu_restock = (
-    filtered_master_df["Status Display"]
-    .eq("🟡 Perlu Restock")
-    .sum()
-)
+    for lantai, tab in stock_tabs.items():
+        with tab:
+            detail_lantai_df = filtered_stock_df[
+                (filtered_stock_df["Lantai"] == lantai) &
+                (filtered_stock_df["Status Stock"] == "🔴 Tidak Patuh")
+            ].copy()
 
-total_display_negatif = (
-    filtered_master_df["Status Display"]
-    .eq("🔴 Display Negatif")
-    .sum()
-)
+            st.markdown(f"### {lantai}")
 
-total_restock_qty = (
-    filtered_master_df["Restock Dibutuhkan"]
-    .sum()
-)
+            if detail_lantai_df.empty:
+                st.success("✅ Tidak ada item selisih stock di lantai ini.")
+            else:
+                total_item_selisih = len(detail_lantai_df)
+                total_selisih_abs = detail_lantai_df["Selisih Stock"].abs().sum()
+                total_selisih_net = detail_lantai_df["Selisih Stock"].sum()
 
-col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                col_a, col_b, col_c = st.columns(3)
 
-col_m1.metric("📋 Total Item Master", int(total_item_master))
-col_m2.metric("✅ Sesuai Standar", int(total_sesuai))
-col_m3.metric("⚠️ Perlu Restock", int(total_perlu_restock))
-col_m4.metric("📦 Total Qty Restock", int(total_restock_qty))
+                col_a.metric(
+                    "📦 Item Tidak Patuh",
+                    int(total_item_selisih)
+                )
 
-if total_display_negatif > 0:
-    st.error(f"🚨 Ada {total_display_negatif} baris dengan Display negatif. Cek input Actual/Jumlah.")
+                col_b.metric(
+                    "📊 Total Selisih Abs",
+                    int(total_selisih_abs)
+                )
 
-st.divider()
+                col_c.metric(
+                    "🧾 Total Selisih Net",
+                    int(total_selisih_net)
+                )
+
+                detail_stock_cols = [
+                    "Tanggal",
+                    "Lantai",
+                    "Nama Produk",
+                    "Stock Sore Olsera",
+                    "Stock Sore",
+                    "Selisih Stock",
+                    "Status Stock"
+                ]
+
+                detail_stock_cols = [
+                    col for col in detail_stock_cols
+                    if col in detail_lantai_df.columns
+                ]
+
+                st.dataframe(
+                    detail_lantai_df[detail_stock_cols],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Stock Sore Olsera": st.column_config.NumberColumn(
+                            "Stock Sore Olsera",
+                            format="%d"
+                        ),
+                        "Stock Sore": st.column_config.NumberColumn(
+                            "Stock Sore",
+                            format="%d"
+                        ),
+                        "Selisih Stock": st.column_config.NumberColumn(
+                            "Selisih Stock",
+                            format="%d"
+                        ),
+                    }
+                )
+
+    st.divider()
+
 # ==========================================
-# KPI MASTER DISPLAY PER LANTAI
+# RINGKASAN STANDAR DISPLAY PER LANTAI
 # ==========================================
 st.subheader("🧾 Ringkasan Standar Display per Lantai")
-
-display_summary_lantai_df = (
-    filtered_master_df
-    .groupby("Lantai")
-    .agg(
-        Total_Item_Master=("Nama Produk", "count"),
-        Sesuai_Standar=("Status Display", lambda x: (x == "🟢 Sesuai Standar").sum()),
-        Perlu_Restock=("Status Display", lambda x: (x == "🟡 Perlu Restock").sum()),
-        Display_Negatif=("Status Display", lambda x: (x == "🔴 Display Negatif").sum()),
-        Total_Qty_Restock=("Restock Dibutuhkan", "sum")
-    )
-    .reset_index()
-)
-
-display_summary_lantai_df["Status Standar Display"] = display_summary_lantai_df.apply(
-    lambda row: (
-        "🔴 Ada Display Negatif"
-        if row["Display_Negatif"] > 0
-        else "🟡 Perlu Restock"
-        if row["Perlu_Restock"] > 0
-        else "🟢 Sesuai Standar"
-    ),
-    axis=1
-)
-
-# Urutkan Lantai 3, 8, 9
-lantai_order = {
-    "Lantai 3": 1,
-    "Lantai 8": 2,
-    "Lantai 9": 3
-}
-
-display_summary_lantai_df["Urutan"] = display_summary_lantai_df["Lantai"].map(lantai_order)
-
-display_summary_lantai_df = (
-    display_summary_lantai_df
-    .sort_values("Urutan")
-    .drop(columns=["Urutan"])
-)
 
 col_d3, col_d8, col_d9 = st.columns(3)
 
@@ -818,44 +846,155 @@ for col, lantai in zip(
 
         col.metric(
             f"🏢 {lantai}",
-            status,
+            status.replace("🔴 ", "").replace("🟡 ", "").replace("🟢 ", ""),
             f"{sesuai}/{total_item} sesuai | {perlu_restock} restock | Qty {total_qty_restock}"
         )
 
-st.dataframe(
-    display_summary_lantai_df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "Total_Item_Master": st.column_config.NumberColumn(
-            "Total Item Master",
-            format="%d"
-        ),
-        "Sesuai_Standar": st.column_config.NumberColumn(
-            "Sesuai Standar",
-            format="%d"
-        ),
-        "Perlu_Restock": st.column_config.NumberColumn(
-            "Perlu Restock",
-            format="%d"
-        ),
-        "Display_Negatif": st.column_config.NumberColumn(
-            "Display Negatif",
-            format="%d"
-        ),
-        "Total_Qty_Restock": st.column_config.NumberColumn(
-            "Total Qty Restock",
-            format="%d"
-        ),
-    }
-)
+if display_summary_lantai_df.empty:
+    st.info("Belum ada data standar display untuk filter ini.")
+else:
+    st.dataframe(
+        display_summary_lantai_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Total_Item_Master": st.column_config.NumberColumn(
+                "Total Item Master",
+                format="%d"
+            ),
+            "Sesuai_Standar": st.column_config.NumberColumn(
+                "Sesuai Standar",
+                format="%d"
+            ),
+            "Perlu_Restock": st.column_config.NumberColumn(
+                "Perlu Restock",
+                format="%d"
+            ),
+            "Display_Negatif": st.column_config.NumberColumn(
+                "Display Negatif",
+                format="%d"
+            ),
+            "Total_Qty_Restock": st.column_config.NumberColumn(
+                "Total Qty Restock",
+                format="%d"
+            ),
+        }
+    )
 
-total_display_negatif = display_summary_lantai_df["Display_Negatif"].sum()
+total_display_negatif = (
+    display_summary_lantai_df["Display_Negatif"].sum()
+    if not display_summary_lantai_df.empty else 0
+)
 
 if total_display_negatif > 0:
     st.error(f"🚨 Ada {int(total_display_negatif)} baris dengan Display negatif. Cek input Actual/Jumlah.")
 
 st.divider()
+
+# ==========================================
+# DETAIL DISPLAY RESTOCK PER LANTAI
+# ==========================================
+st.subheader("🔎 Detail Display / Restock per Lantai")
+
+tab_display_l3, tab_display_l8, tab_display_l9 = st.tabs([
+    "🏢 Lantai 3",
+    "🏢 Lantai 8",
+    "🏢 Lantai 9"
+])
+
+display_tabs = {
+    "Lantai 3": tab_display_l3,
+    "Lantai 8": tab_display_l8,
+    "Lantai 9": tab_display_l9
+}
+
+for lantai, tab in display_tabs.items():
+    with tab:
+        detail_display_lantai_df = filtered_master_df[
+            (filtered_master_df["Lantai"] == lantai) &
+            (filtered_master_df["Status Display"] != "🟢 Sesuai Standar")
+        ].copy()
+
+        st.markdown(f"### {lantai}")
+
+        if detail_display_lantai_df.empty:
+            st.success("✅ Semua display sudah sesuai standar di lantai ini.")
+        else:
+            total_perlu_restock = (
+                detail_display_lantai_df["Status Display"]
+                .eq("🟡 Perlu Restock")
+                .sum()
+            )
+
+            total_display_negatif = (
+                detail_display_lantai_df["Status Display"]
+                .eq("🔴 Display Negatif")
+                .sum()
+            )
+
+            total_qty_restock = detail_display_lantai_df["Restock Dibutuhkan"].sum()
+
+            col_a, col_b, col_c = st.columns(3)
+
+            col_a.metric(
+                "⚠️ Item Perlu Restock",
+                int(total_perlu_restock)
+            )
+
+            col_b.metric(
+                "🚨 Display Negatif",
+                int(total_display_negatif)
+            )
+
+            col_c.metric(
+                "📦 Qty Restock",
+                int(total_qty_restock)
+            )
+
+            display_detail_columns = [
+                "Tanggal",
+                "Lantai",
+                "Nama Produk",
+                "Jumlah",
+                "Actual",
+                "Display",
+                "Restock Dibutuhkan",
+                "Status Display",
+                "Notes",
+                "Source Sheet"
+            ]
+
+            display_detail_columns = [
+                col for col in display_detail_columns
+                if col in detail_display_lantai_df.columns
+            ]
+
+            st.dataframe(
+                detail_display_lantai_df[display_detail_columns],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Jumlah": st.column_config.NumberColumn(
+                        "Jumlah",
+                        format="%d"
+                    ),
+                    "Actual": st.column_config.NumberColumn(
+                        "Actual",
+                        format="%d"
+                    ),
+                    "Display": st.column_config.NumberColumn(
+                        "Display",
+                        format="%d"
+                    ),
+                    "Restock Dibutuhkan": st.column_config.NumberColumn(
+                        "Restock Dibutuhkan",
+                        format="%d"
+                    ),
+                }
+            )
+
+st.divider()
+
 # ==========================================
 # REKONSILIASI DATA
 # ==========================================
@@ -940,69 +1079,6 @@ else:
 st.divider()
 
 # ==========================================
-# CHART DISPLAY STATUS
-# ==========================================
-st.subheader("📊 Status Standar Display")
-
-display_status_df = (
-    filtered_master_df
-    .groupby("Status Display")
-    .size()
-    .reset_index(name="Jumlah Baris")
-)
-
-if display_status_df.empty:
-    st.info("Belum ada data master display untuk filter ini.")
-else:
-    fig_display = px.bar(
-        display_status_df,
-        x="Status Display",
-        y="Jumlah Baris",
-        text_auto=True
-    )
-
-    fig_display.update_layout(
-        height=400
-    )
-
-    st.plotly_chart(
-        fig_display,
-        use_container_width=True
-    )
-
-st.divider()
-
-# ==========================================
-# REKAP RESTOCK PER LANTAI
-# ==========================================
-st.subheader("📦 Rekap Restock Dibutuhkan per Lantai")
-
-restock_lantai_df = (
-    filtered_master_df
-    .groupby("Lantai")["Restock Dibutuhkan"]
-    .sum()
-    .reset_index()
-    .sort_values("Lantai")
-)
-
-if restock_lantai_df.empty:
-    st.info("Belum ada data restock untuk filter ini.")
-else:
-    st.dataframe(
-        restock_lantai_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Restock Dibutuhkan": st.column_config.NumberColumn(
-                "Restock Dibutuhkan",
-                format="%d"
-            )
-        }
-    )
-
-st.divider()
-
-# ==========================================
 # DATA SELISIH REKONSILIASI
 # ==========================================
 st.subheader("🚨 Data Selisih Rekonsiliasi Tidak Match")
@@ -1035,194 +1111,13 @@ else:
 st.divider()
 
 # ==========================================
-# DATA KEPATUHAN STOCK PER LANTAI
-# ==========================================
-if stock_compliance_available:
-    st.subheader("🚨 Flag Kepatuhan Stock per Lantai")
-
-    stock_tidak_patuh_lantai_df = stock_flag_lantai_df[
-        stock_flag_lantai_df["Status Kepatuhan Stock"] == "🔴 Tidak Patuh"
-    ].copy()
-
-    if stock_tidak_patuh_lantai_df.empty:
-        st.success("✅ Semua lantai patuh. Stock Sore Olsera sudah sesuai dengan Stock Sore.")
-    else:
-        st.dataframe(
-            stock_tidak_patuh_lantai_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Total_Item": st.column_config.NumberColumn(
-                    "Total Item",
-                    format="%d"
-                ),
-                "Item_Tidak_Patuh": st.column_config.NumberColumn(
-                    "Item Tidak Patuh",
-                    format="%d"
-                ),
-                "Total_Selisih_Stock": st.column_config.NumberColumn(
-                    "Total Selisih Stock",
-                    format="%d"
-                ),
-            }
-        )
-
-    with st.expander("Lihat Detail Item Selisih Stock"):
-        detail_stock_selisih_df = filtered_stock_df[
-            filtered_stock_df["Status Stock"] == "🔴 Tidak Patuh"
-        ].copy()
-
-        if detail_stock_selisih_df.empty:
-            st.success("Tidak ada item yang selisih.")
-        else:
-            st.dataframe(
-                detail_stock_selisih_df[
-                    [
-                        "Tanggal",
-                        "Lantai",
-                        "Nama Produk",
-                        "Stock Sore Olsera",
-                        "Stock Sore",
-                        "Selisih Stock",
-                        "Status Stock"
-                    ]
-                ],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Stock Sore Olsera": st.column_config.NumberColumn(
-                        "Stock Sore Olsera",
-                        format="%d"
-                    ),
-                    "Stock Sore": st.column_config.NumberColumn(
-                        "Stock Sore",
-                        format="%d"
-                    ),
-                    "Selisih Stock": st.column_config.NumberColumn(
-                        "Selisih Stock",
-                        format="%d"
-                    ),
-                }
-            )
-
-    st.divider()
-
-# ==========================================
-# MASTER DISPLAY CHECK TABLE
-# ==========================================
-st.subheader("🧾 Cek Display vs Jumlah Standar")
-
-problem_display_df = filtered_master_df[
-    filtered_master_df["Status Display"] != "🟢 Sesuai Standar"
-].copy()
-
-display_columns = [
-    "Tanggal",
-    "Lantai",
-    "Nama Produk",
-    "Jumlah",
-    "Actual",
-    "Display",
-    "Restock Dibutuhkan",
-    "Status Display",
-    "Notes",
-    "Source Sheet"
-]
-
-display_columns = [
-    col for col in display_columns
-    if col in problem_display_df.columns
-]
-
-if problem_display_df.empty:
-    st.success("✅ Semua display sudah sesuai standar.")
-else:
-    st.dataframe(
-        problem_display_df[display_columns],
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Jumlah": st.column_config.NumberColumn(
-                "Jumlah",
-                format="%d"
-            ),
-            "Actual": st.column_config.NumberColumn(
-                "Actual",
-                format="%d"
-            ),
-            "Display": st.column_config.NumberColumn(
-                "Display",
-                format="%d"
-            ),
-            "Restock Dibutuhkan": st.column_config.NumberColumn(
-                "Restock Dibutuhkan",
-                format="%d"
-            ),
-        }
-    )
-
-with st.expander("Lihat Semua Data Master Display"):
-    st.dataframe(
-        filtered_master_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Jumlah": st.column_config.NumberColumn(
-                "Jumlah",
-                format="%d"
-            ),
-            "Actual": st.column_config.NumberColumn(
-                "Actual",
-                format="%d"
-            ),
-            "Display": st.column_config.NumberColumn(
-                "Display",
-                format="%d"
-            ),
-            "Restock Dibutuhkan": st.column_config.NumberColumn(
-                "Restock Dibutuhkan",
-                format="%d"
-            ),
-        }
-    )
-
-st.divider()
-
-# ==========================================
-# REKONSILIASI TABLE
-# ==========================================
-st.subheader("📋 Tabel Rekonsiliasi")
-
-st.dataframe(
-    rekon_df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "Uang Seharusnya Dibayar": st.column_config.NumberColumn(
-            "Uang Seharusnya Dibayar",
-            format="Rp %d"
-        ),
-        "Total Terbayar": st.column_config.NumberColumn(
-            "Total Terbayar",
-            format="Rp %d"
-        ),
-        "Selisih": st.column_config.NumberColumn(
-            "Selisih",
-            format="Rp %d"
-        ),
-    }
-)
-
-st.divider()
-
-# ==========================================
 # DETAIL STOCK
 # ==========================================
 st.subheader("📦 Detail Penjualan Stock")
 
 stock_column_config = {
-    "HargaJual": st.column_config.NumberColumn(
-        "HargaJual",
+    "Harga Jual": st.column_config.NumberColumn(
+        "Harga Jual",
         format="Rp %d"
     ),
     "Uang Seharusnya Dibayar": st.column_config.NumberColumn(
@@ -1280,7 +1175,7 @@ st.dataframe(
 st.divider()
 
 # ==========================================
-# TOP PRODUK TERLARIS - MOVED TO BOTTOM
+# TOP PRODUK TERLARIS - BOTTOM
 # ==========================================
 st.subheader("🔥 Top 10 Produk Terlaris")
 
@@ -1355,22 +1250,24 @@ with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
         index=False
     )
 
-    problem_display_df.to_excel(
+    filtered_master_df[
+        filtered_master_df["Status Display"] != "🟢 Sesuai Standar"
+    ].to_excel(
         writer,
         sheet_name="Display Perlu Dicek",
         index=False
     )
 
-    restock_lantai_df.to_excel(
+    display_summary_lantai_df.to_excel(
         writer,
-        sheet_name="Rekap Restock Lantai",
+        sheet_name="Summary Display Lantai",
         index=False
     )
 
     if stock_compliance_available:
-        stock_flag_lantai_df.to_excel(
+        stock_summary_lantai_df.to_excel(
             writer,
-            sheet_name="Flag Stock Lantai",
+            sheet_name="Summary Stock Lantai",
             index=False
         )
 

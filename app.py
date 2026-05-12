@@ -85,41 +85,61 @@ def format_lantai(value):
     if pd.isna(value):
         return None
 
-    value = str(value).strip()
+    value = str(value).strip().lower()
 
     mapping = {
         "3": "Lantai 3",
         "8": "Lantai 8",
         "9": "Lantai 9",
-        "Lantai 3": "Lantai 3",
-        "Lantai 8": "Lantai 8",
-        "Lantai 9": "Lantai 9",
-        "LT 3": "Lantai 3",
-        "LT 8": "Lantai 8",
-        "LT 9": "Lantai 9",
-        "Lt 3": "Lantai 3",
-        "Lt 8": "Lantai 8",
-        "Lt 9": "Lantai 9"
+        "lantai 3": "Lantai 3",
+        "lantai 8": "Lantai 8",
+        "lantai 9": "Lantai 9",
+        "lt 3": "Lantai 3",
+        "lt 8": "Lantai 8",
+        "lt 9": "Lantai 9",
+        "lt3": "Lantai 3",
+        "lt8": "Lantai 8",
+        "lt9": "Lantai 9",
+        "lantai3": "Lantai 3",
+        "lantai8": "Lantai 8",
+        "lantai9": "Lantai 9",
     }
 
-    return mapping.get(value, value)
+    return mapping.get(value, str(value).title())
+
+
+def lantai_from_sheet_name(sheet_name):
+    sheet_name_clean = str(sheet_name).strip().lower()
+
+    if "3" in sheet_name_clean:
+        return "Lantai 3"
+
+    elif "8" in sheet_name_clean:
+        return "Lantai 8"
+
+    elif "9" in sheet_name_clean:
+        return "Lantai 9"
+
+    return sheet_name
 
 
 def get_display_status(row):
-    standar = row["Standar Display"]
-    actual = row["Actual"]
+    jumlah = row["Jumlah"]
+    display = row["Display"]
 
-    if pd.isna(actual):
-        return "🔴 Belum Input Actual"
+    if pd.isna(display):
+        return "🔴 Belum Ada Display"
 
-    if actual == standar:
+    if display < 0:
+        return "🔴 Display Negatif"
+
+    if display == jumlah:
         return "🟢 Sesuai Standar"
 
-    elif actual < standar:
-        return "🟡 Kurang dari Standar"
+    if display < jumlah:
+        return "🟡 Perlu Restock"
 
-    else:
-        return "🔵 Lebih dari Standar"
+    return "🔵 Lebih dari Standar"
 
 
 def get_rekon_status(selisih):
@@ -131,32 +151,75 @@ def get_rekon_status(selisih):
         return "🟡 LEBIH"
 
 
+def rupiah(value):
+    return f"Rp {value:,.0f}".replace(",", ".")
+
+
 # ==========================================
-# LOAD MASTER DATA
+# LOAD MASTER DATA - MULTIPLE SHEETS
 # ==========================================
 try:
-    master_df = pd.read_excel(master_file)
+    master_sheets = pd.read_excel(
+        master_file,
+        sheet_name=None
+    )
 
 except Exception as e:
     st.error(f"❌ Error membaca master data: {e}")
     st.stop()
 
-# ==========================================
-# CLEAN MASTER COLUMNS
-# ==========================================
-master_df.columns = (
-    master_df.columns
-    .str.strip()
-    .str.replace("\ufeff", "")
+master_list = []
+
+for sheet_name, df in master_sheets.items():
+
+    if df.empty:
+        continue
+
+    df.columns = (
+        df.columns
+        .astype(str)
+        .str.strip()
+        .str.replace("\ufeff", "")
+    )
+
+    # Samakan nama kolom
+    rename_cols = {}
+
+    if "Produk" in df.columns and "Nama Produk" not in df.columns:
+        rename_cols["Produk"] = "Nama Produk"
+
+    if "product" in [col.lower() for col in df.columns]:
+        for col in df.columns:
+            if col.lower() == "product":
+                rename_cols[col] = "Nama Produk"
+
+    if "Standar Display" in df.columns and "Jumlah" not in df.columns:
+        rename_cols["Standar Display"] = "Jumlah"
+
+    if "Qty" in df.columns and "Jumlah" not in df.columns:
+        rename_cols["Qty"] = "Jumlah"
+
+    df = df.rename(columns=rename_cols)
+
+    # Kalau sheet tidak punya kolom lantai, ambil dari nama sheet
+    if "Lantai" not in df.columns and "lantai" not in df.columns:
+        df["Lantai"] = lantai_from_sheet_name(sheet_name)
+
+    if "lantai" in df.columns and "Lantai" not in df.columns:
+        df = df.rename(columns={"lantai": "Lantai"})
+
+    df["Source Sheet"] = sheet_name
+
+    master_list.append(df)
+
+if len(master_list) == 0:
+    st.error("❌ master_data.xlsx kosong atau tidak ada data yang terbaca.")
+    st.stop()
+
+master_df = pd.concat(
+    master_list,
+    ignore_index=True
 )
-
-# Samakan nama kolom produk
-if "Produk" in master_df.columns and "Nama Produk" not in master_df.columns:
-    master_df = master_df.rename(columns={"Produk": "Nama Produk"})
-
-# Samakan nama kolom jumlah standar
-if "Jumlah" in master_df.columns and "Standar Display" not in master_df.columns:
-    master_df = master_df.rename(columns={"Jumlah": "Standar Display"})
 
 # ==========================================
 # VALIDATE MASTER COLUMNS
@@ -164,7 +227,7 @@ if "Jumlah" in master_df.columns and "Standar Display" not in master_df.columns:
 required_master_cols = [
     "Tanggal",
     "Nama Produk",
-    "Standar Display",
+    "Jumlah",
     "Actual"
 ]
 
@@ -175,7 +238,7 @@ missing_master_cols = [
 
 if missing_master_cols:
     st.error(f"❌ Kolom master data tidak ditemukan: {missing_master_cols}")
-    st.info("Pastikan master_data.xlsx punya kolom: Tanggal, Produk/Jenis Produk, Jumlah, Actual.")
+    st.info("Pastikan tiap sheet master punya kolom minimal: Tanggal, Produk/Nama Produk, Jumlah, Actual.")
     st.stop()
 
 # ==========================================
@@ -187,36 +250,53 @@ master_df["Tanggal"] = pd.to_datetime(
     dayfirst=True
 ).dt.date
 
-master_df["Nama Produk"] = master_df["Nama Produk"].astype(str).str.strip()
+master_df["Nama Produk"] = (
+    master_df["Nama Produk"]
+    .astype(str)
+    .str.strip()
+)
 
-master_df["Standar Display"] = pd.to_numeric(
-    master_df["Standar Display"],
+master_df["Lantai"] = master_df["Lantai"].apply(format_lantai)
+
+master_df["Jumlah"] = pd.to_numeric(
+    master_df["Jumlah"],
     errors="coerce"
 ).fillna(0)
 
 master_df["Actual"] = pd.to_numeric(
     master_df["Actual"],
     errors="coerce"
-)
+).fillna(0)
 
-# Kalau master punya kolom Lantai, ikut dipakai
-if "Lantai" in master_df.columns:
-    master_df["Lantai"] = master_df["Lantai"].apply(format_lantai)
+# Kalau Display sudah ada di file, pakai Display dari file.
+# Kalau belum ada, hitung otomatis dari Jumlah - Actual.
+if "Display" in master_df.columns:
+    master_df["Display"] = pd.to_numeric(
+        master_df["Display"],
+        errors="coerce"
+    )
+    master_df["Display"] = master_df["Display"].fillna(
+        master_df["Jumlah"] - master_df["Actual"]
+    )
+else:
+    master_df["Display"] = master_df["Jumlah"] - master_df["Actual"]
 
-# Notes optional
-if "Notes" not in master_df.columns:
-    master_df["Notes"] = ""
+# Selisih yang harus direstock
+master_df["Restock Dibutuhkan"] = master_df["Jumlah"] - master_df["Display"]
 
-# Hitung selisih display
-master_df["Selisih Display"] = (
-    master_df["Actual"].fillna(0) -
-    master_df["Standar Display"]
-)
+# Kalau Display lebih besar/sama dengan Jumlah, tidak perlu restock
+master_df.loc[
+    master_df["Restock Dibutuhkan"] < 0,
+    "Restock Dibutuhkan"
+] = 0
 
 master_df["Status Display"] = master_df.apply(
     get_display_status,
     axis=1
 )
+
+if "Notes" not in master_df.columns:
+    master_df["Notes"] = ""
 
 # ==========================================
 # LOAD STOCK DATA
@@ -233,6 +313,7 @@ except Exception as e:
 # ==========================================
 stock_df.columns = (
     stock_df.columns
+    .astype(str)
     .str.strip()
     .str.replace("\ufeff", "")
 )
@@ -268,11 +349,20 @@ stock_df["Tanggal"] = pd.to_datetime(
     dayfirst=True
 ).dt.date
 
-stock_df["Nama Produk"] = stock_df["Nama Produk"].astype(str).str.strip()
+stock_df["Nama Produk"] = (
+    stock_df["Nama Produk"]
+    .astype(str)
+    .str.strip()
+)
+
 stock_df["Lantai"] = stock_df["Lantai"].apply(format_lantai)
 
 stock_df["Harga Jual"] = stock_df["Harga Jual"].apply(clean_rupiah)
-stock_df["Uang Seharusnya Dibayar"] = stock_df["Uang Seharusnya Dibayar"].apply(clean_rupiah)
+
+stock_df["Uang Seharusnya Dibayar"] = (
+    stock_df["Uang Seharusnya Dibayar"]
+    .apply(clean_rupiah)
+)
 
 stock_df["Terjual"] = pd.to_numeric(
     stock_df["Terjual"],
@@ -294,6 +384,7 @@ except Exception as e:
 # ==========================================
 qris_df.columns = (
     qris_df.columns
+    .astype(str)
     .str.strip()
     .str.replace("\ufeff", "")
 )
@@ -347,7 +438,12 @@ merchant_mapping = {
     "Warung FIFGROUP 3": "Lantai 9"
 }
 
-qris_df["Nama Merchant"] = qris_df["Nama Merchant"].astype(str).str.strip()
+qris_df["Nama Merchant"] = (
+    qris_df["Nama Merchant"]
+    .astype(str)
+    .str.strip()
+)
+
 qris_df["Lantai"] = qris_df["Nama Merchant"].map(merchant_mapping)
 
 unknown_merchants = (
@@ -397,6 +493,11 @@ with col_filter2:
 # ==========================================
 # FILTER DATA
 # ==========================================
+filtered_master_df = master_df[
+    (master_df["Lantai"].isin(lantai_filter)) &
+    (master_df["Tanggal"].isin(tanggal_filter))
+].copy()
+
 filtered_stock_df = stock_df[
     (stock_df["Lantai"].isin(lantai_filter)) &
     (stock_df["Tanggal"].isin(tanggal_filter))
@@ -406,15 +507,6 @@ filtered_qris_df = qris_df[
     (qris_df["Lantai"].isin(lantai_filter)) &
     (qris_df["Tanggal"].isin(tanggal_filter))
 ].copy()
-
-filtered_master_df = master_df[
-    master_df["Tanggal"].isin(tanggal_filter)
-].copy()
-
-if "Lantai" in filtered_master_df.columns:
-    filtered_master_df = filtered_master_df[
-        filtered_master_df["Lantai"].isin(lantai_filter)
-    ].copy()
 
 # ==========================================
 # KPI REKONSILIASI
@@ -430,12 +522,12 @@ col1, col2, col3, col4 = st.columns(4)
 
 col1.metric(
     "💰 Expected Revenue",
-    f"Rp {total_expected:,.0f}".replace(",", ".")
+    rupiah(total_expected)
 )
 
 col2.metric(
     "💳 Actual QRIS",
-    f"Rp {total_qris:,.0f}".replace(",", ".")
+    rupiah(total_qris)
 )
 
 col3.metric(
@@ -445,7 +537,7 @@ col3.metric(
 
 col4.metric(
     "⚠️ Selisih",
-    f"Rp {total_selisih:,.0f}".replace(",", ".")
+    rupiah(total_selisih)
 )
 
 st.divider()
@@ -463,20 +555,32 @@ total_sesuai = (
     .sum()
 )
 
-total_belum_input = (
+total_perlu_restock = (
     filtered_master_df["Status Display"]
-    .eq("🔴 Belum Input Actual")
+    .eq("🟡 Perlu Restock")
     .sum()
 )
 
-total_tidak_sesuai = total_item_master - total_sesuai - total_belum_input
+total_display_negatif = (
+    filtered_master_df["Status Display"]
+    .eq("🔴 Display Negatif")
+    .sum()
+)
+
+total_restock_qty = (
+    filtered_master_df["Restock Dibutuhkan"]
+    .sum()
+)
 
 col_m1, col_m2, col_m3, col_m4 = st.columns(4)
 
-col_m1.metric("📋 Total Item Master", total_item_master)
-col_m2.metric("✅ Sesuai Standar", total_sesuai)
-col_m3.metric("⚠️ Tidak Sesuai", total_tidak_sesuai)
-col_m4.metric("📝 Belum Input Actual", total_belum_input)
+col_m1.metric("📋 Total Item Master", int(total_item_master))
+col_m2.metric("✅ Sesuai Standar", int(total_sesuai))
+col_m3.metric("⚠️ Perlu Restock", int(total_perlu_restock))
+col_m4.metric("📦 Total Qty Restock", int(total_restock_qty))
+
+if total_display_negatif > 0:
+    st.error(f"🚨 Ada {total_display_negatif} baris dengan Display negatif. Cek input Actual/Jumlah.")
 
 st.divider()
 
@@ -522,9 +626,6 @@ rekon_df = rekon_df.sort_values(
 # ==========================================
 col_chart1, col_chart2 = st.columns(2)
 
-# ==========================================
-# EXPECTED VS ACTUAL
-# ==========================================
 with col_chart1:
     st.subheader("📈 Expected vs Actual QRIS")
 
@@ -540,33 +641,33 @@ with col_chart1:
         .reset_index()
     )
 
-    fig1 = px.bar(
-        chart_df,
-        x="Lantai",
-        y=[
-            "Uang Seharusnya Dibayar",
-            "Total Terbayar"
-        ],
-        barmode="group",
-        labels={
-            "value": "Nominal",
-            "variable": "Kategori"
-        }
-    )
+    if chart_df.empty:
+        st.info("Belum ada data rekonsiliasi untuk filter ini.")
+    else:
+        fig1 = px.bar(
+            chart_df,
+            x="Lantai",
+            y=[
+                "Uang Seharusnya Dibayar",
+                "Total Terbayar"
+            ],
+            barmode="group",
+            labels={
+                "value": "Nominal",
+                "variable": "Kategori"
+            }
+        )
 
-    fig1.update_layout(
-        height=450,
-        yaxis_tickprefix="Rp "
-    )
+        fig1.update_layout(
+            height=450,
+            yaxis_tickprefix="Rp "
+        )
 
-    st.plotly_chart(
-        fig1,
-        use_container_width=True
-    )
+        st.plotly_chart(
+            fig1,
+            use_container_width=True
+        )
 
-# ==========================================
-# TOP PRODUK
-# ==========================================
 with col_chart2:
     st.subheader("🔥 Top 10 Produk Terlaris")
 
@@ -582,23 +683,26 @@ with col_chart2:
         .head(10)
     )
 
-    fig2 = px.bar(
-        top_produk,
-        x="Nama Produk",
-        y="Terjual",
-        text_auto=True,
-        color="Terjual"
-    )
+    if top_produk.empty:
+        st.info("Belum ada data produk untuk filter ini.")
+    else:
+        fig2 = px.bar(
+            top_produk,
+            x="Nama Produk",
+            y="Terjual",
+            text_auto=True,
+            color="Terjual"
+        )
 
-    fig2.update_layout(
-        height=450,
-        xaxis_tickangle=-30
-    )
+        fig2.update_layout(
+            height=450,
+            xaxis_tickangle=-30
+        )
 
-    st.plotly_chart(
-        fig2,
-        use_container_width=True
-    )
+        st.plotly_chart(
+            fig2,
+            use_container_width=True
+        )
 
 st.divider()
 
@@ -611,7 +715,7 @@ display_status_df = (
     filtered_master_df
     .groupby("Status Display")
     .size()
-    .reset_index(name="Jumlah")
+    .reset_index(name="Jumlah Baris")
 )
 
 if display_status_df.empty:
@@ -620,7 +724,7 @@ else:
     fig_display = px.bar(
         display_status_df,
         x="Status Display",
-        y="Jumlah",
+        y="Jumlah Baris",
         text_auto=True
     )
 
@@ -631,6 +735,36 @@ else:
     st.plotly_chart(
         fig_display,
         use_container_width=True
+    )
+
+st.divider()
+
+# ==========================================
+# REKAP RESTOCK PER LANTAI
+# ==========================================
+st.subheader("📦 Rekap Restock Dibutuhkan per Lantai")
+
+restock_lantai_df = (
+    filtered_master_df
+    .groupby("Lantai")["Restock Dibutuhkan"]
+    .sum()
+    .reset_index()
+    .sort_values("Lantai")
+)
+
+if restock_lantai_df.empty:
+    st.info("Belum ada data restock untuk filter ini.")
+else:
+    st.dataframe(
+        restock_lantai_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Restock Dibutuhkan": st.column_config.NumberColumn(
+                "Restock Dibutuhkan",
+                format="%d"
+            )
+        }
     )
 
 st.divider()
@@ -670,30 +804,47 @@ st.divider()
 # ==========================================
 # MASTER DISPLAY CHECK TABLE
 # ==========================================
-st.subheader("🧾 Cek Actual vs Standar Display")
+st.subheader("🧾 Cek Display vs Jumlah Standar")
 
 problem_display_df = filtered_master_df[
     filtered_master_df["Status Display"] != "🟢 Sesuai Standar"
 ].copy()
 
 if problem_display_df.empty:
-    st.success("✅ Semua stock actual sudah sesuai standar display.")
+    st.success("✅ Semua display sudah sesuai standar.")
 else:
     st.dataframe(
-        problem_display_df,
+        problem_display_df[
+            [
+                "Tanggal",
+                "Lantai",
+                "Nama Produk",
+                "Jumlah",
+                "Actual",
+                "Display",
+                "Restock Dibutuhkan",
+                "Status Display",
+                "Notes",
+                "Source Sheet"
+            ]
+        ],
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Standar Display": st.column_config.NumberColumn(
-                "Standar Display",
+            "Jumlah": st.column_config.NumberColumn(
+                "Jumlah",
                 format="%d"
             ),
             "Actual": st.column_config.NumberColumn(
                 "Actual",
                 format="%d"
             ),
-            "Selisih Display": st.column_config.NumberColumn(
-                "Selisih Display",
+            "Display": st.column_config.NumberColumn(
+                "Display",
+                format="%d"
+            ),
+            "Restock Dibutuhkan": st.column_config.NumberColumn(
+                "Restock Dibutuhkan",
                 format="%d"
             ),
         }
@@ -705,16 +856,20 @@ with st.expander("Lihat Semua Data Master Display"):
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Standar Display": st.column_config.NumberColumn(
-                "Standar Display",
+            "Jumlah": st.column_config.NumberColumn(
+                "Jumlah",
                 format="%d"
             ),
             "Actual": st.column_config.NumberColumn(
                 "Actual",
                 format="%d"
             ),
-            "Selisih Display": st.column_config.NumberColumn(
-                "Selisih Display",
+            "Display": st.column_config.NumberColumn(
+                "Display",
+                format="%d"
+            ),
+            "Restock Dibutuhkan": st.column_config.NumberColumn(
+                "Restock Dibutuhkan",
                 format="%d"
             ),
         }
@@ -833,7 +988,13 @@ with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
 
     problem_display_df.to_excel(
         writer,
-        sheet_name="Display Tidak Sesuai",
+        sheet_name="Display Perlu Dicek",
+        index=False
+    )
+
+    restock_lantai_df.to_excel(
+        writer,
+        sheet_name="Rekap Restock Lantai",
         index=False
     )
 

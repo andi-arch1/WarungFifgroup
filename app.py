@@ -623,37 +623,89 @@ st.divider()
 # ==========================================
 # KPI KEPATUHAN STOCK
 # ==========================================
+# ==========================================
+# KPI KEPATUHAN STOCK PER LANTAI
+# ==========================================
 if stock_compliance_available:
-    st.subheader("🧮 Ringkasan Kepatuhan Stock")
+    st.subheader("🧮 Ringkasan Kepatuhan Stock per Lantai")
 
-    total_lantai_checked = len(stock_flag_lantai_df)
-
-    total_lantai_patuh = (
-        stock_flag_lantai_df["Status Kepatuhan Stock"]
-        .eq("🟢 Patuh")
-        .sum()
-        if not stock_flag_lantai_df.empty else 0
+    stock_summary_lantai_df = (
+        filtered_stock_df
+        .groupby("Lantai")
+        .agg(
+            Total_Item=("Nama Produk", "count"),
+            Item_Selisih_Stock=("Status Stock", lambda x: (x == "🔴 Tidak Patuh").sum()),
+            Total_Selisih_Stock=("Selisih Stock", "sum")
+        )
+        .reset_index()
     )
 
-    total_lantai_tidak_patuh = (
-        stock_flag_lantai_df["Status Kepatuhan Stock"]
-        .eq("🔴 Tidak Patuh")
-        .sum()
-        if not stock_flag_lantai_df.empty else 0
+    stock_summary_lantai_df["Status Kepatuhan Stock"] = stock_summary_lantai_df[
+        "Item_Selisih_Stock"
+    ].apply(
+        lambda x: "🟢 Patuh" if x == 0 else "🔴 Tidak Patuh"
     )
 
-    total_item_tidak_patuh = (
-        stock_flag_lantai_df["Item_Tidak_Patuh"]
-        .sum()
-        if not stock_flag_lantai_df.empty else 0
+    # Urutkan lantai biar tampil 3, 8, 9
+    lantai_order = {
+        "Lantai 3": 1,
+        "Lantai 8": 2,
+        "Lantai 9": 3
+    }
+
+    stock_summary_lantai_df["Urutan"] = stock_summary_lantai_df["Lantai"].map(lantai_order)
+
+    stock_summary_lantai_df = (
+        stock_summary_lantai_df
+        .sort_values("Urutan")
+        .drop(columns=["Urutan"])
     )
 
-    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+    col_l3, col_l8, col_l9 = st.columns(3)
 
-    col_s1.metric("🏢 Lantai Dicek", int(total_lantai_checked))
-    col_s2.metric("✅ Lantai Patuh", int(total_lantai_patuh))
-    col_s3.metric("🚨 Lantai Tidak Patuh", int(total_lantai_tidak_patuh))
-    col_s4.metric("📦 Item Selisih Stock", int(total_item_tidak_patuh))
+    for col, lantai in zip(
+        [col_l3, col_l8, col_l9],
+        ["Lantai 3", "Lantai 8", "Lantai 9"]
+    ):
+        data_lantai = stock_summary_lantai_df[
+            stock_summary_lantai_df["Lantai"] == lantai
+        ]
+
+        if data_lantai.empty:
+            col.metric(
+                f"🏢 {lantai}",
+                "Tidak Ada Data"
+            )
+        else:
+            item_selisih = int(data_lantai["Item_Selisih_Stock"].iloc[0])
+            total_selisih = int(data_lantai["Total_Selisih_Stock"].iloc[0])
+            status = data_lantai["Status Kepatuhan Stock"].iloc[0]
+
+            col.metric(
+                f"🏢 {lantai}",
+                status,
+                f"{item_selisih} item selisih | Total selisih: {total_selisih}"
+            )
+
+    st.dataframe(
+        stock_summary_lantai_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Total_Item": st.column_config.NumberColumn(
+                "Total Item",
+                format="%d"
+            ),
+            "Item_Selisih_Stock": st.column_config.NumberColumn(
+                "Item Selisih Stock",
+                format="%d"
+            ),
+            "Total_Selisih_Stock": st.column_config.NumberColumn(
+                "Total Selisih Stock",
+                format="%d"
+            ),
+        }
+    )
 
     st.divider()
 

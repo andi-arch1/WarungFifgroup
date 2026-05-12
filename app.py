@@ -325,7 +325,7 @@ required_stock_cols = [
     "Tanggal",
     "Lantai",
     "Nama Produk",
-    "Harga Jual",
+    "HargaJual",
     "Terjual",
     "Uang Seharusnya Dibayar"
 ]

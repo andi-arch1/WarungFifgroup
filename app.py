@@ -750,7 +750,112 @@ if total_display_negatif > 0:
     st.error(f"🚨 Ada {total_display_negatif} baris dengan Display negatif. Cek input Actual/Jumlah.")
 
 st.divider()
+# ==========================================
+# KPI MASTER DISPLAY PER LANTAI
+# ==========================================
+st.subheader("🧾 Ringkasan Standar Display per Lantai")
 
+display_summary_lantai_df = (
+    filtered_master_df
+    .groupby("Lantai")
+    .agg(
+        Total_Item_Master=("Nama Produk", "count"),
+        Sesuai_Standar=("Status Display", lambda x: (x == "🟢 Sesuai Standar").sum()),
+        Perlu_Restock=("Status Display", lambda x: (x == "🟡 Perlu Restock").sum()),
+        Display_Negatif=("Status Display", lambda x: (x == "🔴 Display Negatif").sum()),
+        Total_Qty_Restock=("Restock Dibutuhkan", "sum")
+    )
+    .reset_index()
+)
+
+display_summary_lantai_df["Status Standar Display"] = display_summary_lantai_df.apply(
+    lambda row: (
+        "🔴 Ada Display Negatif"
+        if row["Display_Negatif"] > 0
+        else "🟡 Perlu Restock"
+        if row["Perlu_Restock"] > 0
+        else "🟢 Sesuai Standar"
+    ),
+    axis=1
+)
+
+# Urutkan Lantai 3, 8, 9
+lantai_order = {
+    "Lantai 3": 1,
+    "Lantai 8": 2,
+    "Lantai 9": 3
+}
+
+display_summary_lantai_df["Urutan"] = display_summary_lantai_df["Lantai"].map(lantai_order)
+
+display_summary_lantai_df = (
+    display_summary_lantai_df
+    .sort_values("Urutan")
+    .drop(columns=["Urutan"])
+)
+
+col_d3, col_d8, col_d9 = st.columns(3)
+
+for col, lantai in zip(
+    [col_d3, col_d8, col_d9],
+    ["Lantai 3", "Lantai 8", "Lantai 9"]
+):
+    data_lantai = display_summary_lantai_df[
+        display_summary_lantai_df["Lantai"] == lantai
+    ]
+
+    if data_lantai.empty:
+        col.metric(
+            f"🏢 {lantai}",
+            "Tidak Ada Data"
+        )
+    else:
+        total_item = int(data_lantai["Total_Item_Master"].iloc[0])
+        sesuai = int(data_lantai["Sesuai_Standar"].iloc[0])
+        perlu_restock = int(data_lantai["Perlu_Restock"].iloc[0])
+        total_qty_restock = int(data_lantai["Total_Qty_Restock"].iloc[0])
+        status = data_lantai["Status Standar Display"].iloc[0]
+
+        col.metric(
+            f"🏢 {lantai}",
+            status,
+            f"{sesuai}/{total_item} sesuai | {perlu_restock} restock | Qty {total_qty_restock}"
+        )
+
+st.dataframe(
+    display_summary_lantai_df,
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "Total_Item_Master": st.column_config.NumberColumn(
+            "Total Item Master",
+            format="%d"
+        ),
+        "Sesuai_Standar": st.column_config.NumberColumn(
+            "Sesuai Standar",
+            format="%d"
+        ),
+        "Perlu_Restock": st.column_config.NumberColumn(
+            "Perlu Restock",
+            format="%d"
+        ),
+        "Display_Negatif": st.column_config.NumberColumn(
+            "Display Negatif",
+            format="%d"
+        ),
+        "Total_Qty_Restock": st.column_config.NumberColumn(
+            "Total Qty Restock",
+            format="%d"
+        ),
+    }
+)
+
+total_display_negatif = display_summary_lantai_df["Display_Negatif"].sum()
+
+if total_display_negatif > 0:
+    st.error(f"🚨 Ada {int(total_display_negatif)} baris dengan Display negatif. Cek input Actual/Jumlah.")
+
+st.divider()
 # ==========================================
 # REKONSILIASI DATA
 # ==========================================

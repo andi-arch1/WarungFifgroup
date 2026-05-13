@@ -244,6 +244,15 @@ if missing_stock_cols:
     st.error(f"❌ Kolom stock_harian tidak ditemukan: {missing_stock_cols}")
     st.stop()
 
+# Optional tapi dibutuhkan untuk fitur keuntungan karyawan
+if "Harga Beli" not in stock_df.columns:
+    stock_df["Harga Beli"] = 0
+    st.warning("⚠️ Kolom 'Harga Beli' belum ditemukan. Keuntungan karyawan akan terbaca Rp 0.")
+
+if "Nama Karyawan" not in stock_df.columns:
+    stock_df["Nama Karyawan"] = ""
+    st.warning("⚠️ Kolom 'Nama Karyawan' belum ditemukan. Rekap per karyawan tidak akan muncul.")
+
 stock_df["Tanggal"] = pd.to_datetime(
     stock_df["Tanggal"],
     errors="coerce",
@@ -256,8 +265,17 @@ stock_df["Nama Produk"] = (
     .str.strip()
 )
 
+stock_df["Nama Karyawan"] = (
+    stock_df["Nama Karyawan"]
+    .astype(str)
+    .str.strip()
+    .replace("nan", "")
+)
+
 stock_df["Lantai"] = stock_df["Lantai"].apply(format_lantai)
+
 stock_df["Harga Jual"] = stock_df["Harga Jual"].apply(clean_rupiah)
+stock_df["Harga Beli"] = stock_df["Harga Beli"].apply(clean_rupiah)
 
 stock_df["Uang Seharusnya Dibayar"] = (
     stock_df["Uang Seharusnya Dibayar"]
@@ -268,6 +286,21 @@ stock_df["Terjual"] = pd.to_numeric(
     stock_df["Terjual"],
     errors="coerce"
 ).fillna(0)
+
+# ==========================================
+# KEUNTUNGAN KARYAWAN
+# Sesuai request: Terjual x Harga Beli
+# ==========================================
+stock_df["Keuntungan Karyawan"] = (
+    stock_df["Terjual"] *
+    stock_df["Harga Beli"]
+)
+
+# Tambahan optional untuk pembanding revenue
+stock_df["Estimasi Margin"] = (
+    stock_df["Uang Seharusnya Dibayar"] -
+    stock_df["Keuntungan Karyawan"]
+)
 
 # ==========================================
 # STOCK COMPLIANCE CHECK
@@ -482,7 +515,6 @@ inventory_df["Restock"] = pd.to_numeric(
     errors="coerce"
 ).fillna(0)
 
-# Ambil data inventory terakhir per produk
 inventory_latest_df = (
     inventory_df
     .sort_values("Tanggal")
@@ -491,13 +523,8 @@ inventory_latest_df = (
     .copy()
 )
 
-# Kalau ada kolom Stock Awal, pakai itu.
-# Kalau belum ada, stock awal dihitung dari jumlah maksimum historis per produk.
 if "Stock Awal" in inventory_df.columns:
-    stock_awal_df = (
-        inventory_df[["Produk", "Stock Awal"]]
-        .copy()
-    )
+    stock_awal_df = inventory_df[["Produk", "Stock Awal"]].copy()
 
     stock_awal_df["Stock Awal"] = pd.to_numeric(
         stock_awal_df["Stock Awal"],
@@ -530,9 +557,10 @@ inventory_latest_df["Stock Awal"] = (
     .fillna(inventory_latest_df["Jumlah"])
 )
 
+# Batas minimum 10% dari stock awal, dibulatkan ke bawah
 inventory_latest_df["Batas Minimum"] = (
     inventory_latest_df["Stock Awal"] * 0.10
-)
+).astype(int)
 
 inventory_latest_df["Status Inventory"] = inventory_latest_df.apply(
     get_inventory_status,
@@ -708,7 +736,7 @@ if menu == "Inventory Restock":
                 ),
                 "Batas Minimum": st.column_config.NumberColumn(
                     "Batas Minimum 10%",
-                    format="%.1f"
+                    format="%d"
                 ),
                 "Saran Restock": st.column_config.NumberColumn(
                     "Saran Restock",
@@ -763,7 +791,7 @@ if menu == "Inventory Restock":
             ),
             "Batas Minimum": st.column_config.NumberColumn(
                 "Batas Minimum 10%",
-                format="%.1f"
+                format="%d"
             ),
             "Saran Restock": st.column_config.NumberColumn(
                 "Saran Restock",
@@ -812,7 +840,7 @@ if menu == "Inventory Restock":
 st.title("🛒 Dashboard Warung FIFGROUP")
 
 st.markdown("""
-Monitoring Penjualan Harian, Rekonsiliasi QRIS, Kepatuhan Stock, dan Standar Display  
+Monitoring Penjualan Harian, Rekonsiliasi QRIS, Kepatuhan Stock, Standar Display, dan Keuntungan Karyawan  
 📍 Warung FIFGROUP Lantai 3 • Lantai 8 • Lantai 9
 """)
 
@@ -1042,12 +1070,46 @@ else:
     display_summary_lantai_df = pd.DataFrame()
 
 # ==========================================
+# KEUNTUNGAN KARYAWAN SUMMARY
+# ==========================================
+karyawan_keuntungan_df = (
+    filtered_stock_df[
+        (filtered_stock_df["Terjual"] > 0) &
+        (filtered_stock_df["Nama Karyawan"] != "")
+    ]
+    .groupby("Nama Karyawan")
+    .agg(
+        Total_Qty_Terjual=("Terjual", "sum"),
+        Total_Keuntungan_Karyawan=("Keuntungan Karyawan", "sum"),
+        Total_Revenue=("Uang Seharusnya Dibayar", "sum"),
+        Jumlah_Jenis_Produk=("Nama Produk", "nunique")
+    )
+    .reset_index()
+    .sort_values("Total_Keuntungan_Karyawan", ascending=False)
+)
+
+barang_terjual_df = (
+    filtered_stock_df[filtered_stock_df["Terjual"] > 0]
+    .groupby(["Nama Produk"])
+    .agg(
+        Total_Qty_Terjual=("Terjual", "sum"),
+        Total_Harga_Beli=("Keuntungan Karyawan", "sum"),
+        Total_Revenue=("Uang Seharusnya Dibayar", "sum")
+    )
+    .reset_index()
+    .sort_values("Total_Qty_Terjual", ascending=False)
+)
+
+# ==========================================
 # KPI REKONSILIASI
 # ==========================================
 total_expected = filtered_stock_df["Uang Seharusnya Dibayar"].sum()
 total_qris = filtered_qris_df["Total Terbayar"].sum()
 total_selisih = total_qris - total_expected
 total_terjual = filtered_stock_df["Terjual"].sum()
+total_jenis_produk_terjual = filtered_stock_df[filtered_stock_df["Terjual"] > 0]["Nama Produk"].nunique()
+total_keuntungan_karyawan = filtered_stock_df["Keuntungan Karyawan"].sum()
+total_karyawan_input = filtered_stock_df[filtered_stock_df["Nama Karyawan"] != ""]["Nama Karyawan"].nunique()
 
 st.subheader("📌 Ringkasan Rekonsiliasi")
 
@@ -1055,8 +1117,81 @@ col1, col2, col3, col4 = st.columns(4)
 
 col1.metric("💰 Expected Revenue", rupiah(total_expected))
 col2.metric("💳 Actual QRIS", rupiah(total_qris))
-col3.metric("📦 Produk Terjual", f"{int(total_terjual)}")
+col3.metric("📦 Qty Terjual", f"{int(total_terjual)}")
 col4.metric("⚠️ Selisih", rupiah(total_selisih))
+
+col5, col6, col7, col8 = st.columns(4)
+
+col5.metric("🛒 Jenis Produk Terjual", int(total_jenis_produk_terjual))
+col6.metric("👤 Karyawan Input", int(total_karyawan_input))
+col7.metric("💵 Keuntungan Karyawan", rupiah(total_keuntungan_karyawan))
+col8.metric("📈 Estimasi Margin", rupiah(filtered_stock_df["Estimasi Margin"].sum()))
+
+st.divider()
+
+# ==========================================
+# KEUNTUNGAN KARYAWAN TABLE
+# ==========================================
+st.subheader("👤 Keuntungan Karyawan Berdasarkan Tanggal Filter")
+
+st.caption("Rumus: Qty Terjual × Harga Beli")
+
+if karyawan_keuntungan_df.empty:
+    st.info("Belum ada data nama karyawan atau barang terjual untuk filter ini.")
+else:
+    st.dataframe(
+        karyawan_keuntungan_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Total_Qty_Terjual": st.column_config.NumberColumn(
+                "Total Qty Terjual",
+                format="%d"
+            ),
+            "Total_Keuntungan_Karyawan": st.column_config.NumberColumn(
+                "Total Keuntungan Karyawan",
+                format="Rp %d"
+            ),
+            "Total_Revenue": st.column_config.NumberColumn(
+                "Total Revenue",
+                format="Rp %d"
+            ),
+            "Jumlah_Jenis_Produk": st.column_config.NumberColumn(
+                "Jumlah Jenis Produk",
+                format="%d"
+            ),
+        }
+    )
+
+st.divider()
+
+# ==========================================
+# RINGKASAN BARANG TERJUAL
+# ==========================================
+st.subheader("🛒 Ringkasan Barang Terjual")
+
+if barang_terjual_df.empty:
+    st.info("Belum ada barang terjual untuk filter ini.")
+else:
+    st.dataframe(
+        barang_terjual_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Total_Qty_Terjual": st.column_config.NumberColumn(
+                "Total Qty Terjual",
+                format="%d"
+            ),
+            "Total_Harga_Beli": st.column_config.NumberColumn(
+                "Total Harga Beli",
+                format="Rp %d"
+            ),
+            "Total_Revenue": st.column_config.NumberColumn(
+                "Total Revenue",
+                format="Rp %d"
+            ),
+        }
+    )
 
 st.divider()
 
@@ -1405,10 +1540,50 @@ st.divider()
 # ==========================================
 st.subheader("📦 Detail Penjualan Stock")
 
+stock_column_config = {
+    "Harga Jual": st.column_config.NumberColumn(
+        "Harga Jual",
+        format="Rp %d"
+    ),
+    "Harga Beli": st.column_config.NumberColumn(
+        "Harga Beli",
+        format="Rp %d"
+    ),
+    "Uang Seharusnya Dibayar": st.column_config.NumberColumn(
+        "Uang Seharusnya Dibayar",
+        format="Rp %d"
+    ),
+    "Keuntungan Karyawan": st.column_config.NumberColumn(
+        "Keuntungan Karyawan",
+        format="Rp %d"
+    ),
+    "Estimasi Margin": st.column_config.NumberColumn(
+        "Estimasi Margin",
+        format="Rp %d"
+    ),
+}
+
+if stock_compliance_available:
+    stock_column_config.update({
+        "Stock Sore Olsera": st.column_config.NumberColumn(
+            "Stock Sore Olsera",
+            format="%d"
+        ),
+        "Stock Sore": st.column_config.NumberColumn(
+            "Stock Sore",
+            format="%d"
+        ),
+        "Selisih Stock": st.column_config.NumberColumn(
+            "Selisih Stock",
+            format="%d"
+        ),
+    })
+
 st.dataframe(
     filtered_stock_df,
     use_container_width=True,
-    hide_index=True
+    hide_index=True,
+    column_config=stock_column_config
 )
 
 st.divider()
@@ -1497,6 +1672,18 @@ with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
     selisih_df.to_excel(
         writer,
         sheet_name="Data Selisih Rekon",
+        index=False
+    )
+
+    karyawan_keuntungan_df.to_excel(
+        writer,
+        sheet_name="Keuntungan Karyawan",
+        index=False
+    )
+
+    barang_terjual_df.to_excel(
+        writer,
+        sheet_name="Barang Terjual",
         index=False
     )
 

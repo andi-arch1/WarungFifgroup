@@ -168,13 +168,13 @@ def get_untung_rugi_status(selisih):
 
 
 def get_inventory_status(row):
-    jumlah = row["Jumlah"]
+    total_stock = row["Total Stock"]
     batas_minimum = row["Batas Minimum"]
 
-    if jumlah <= 0:
+    if total_stock <= 0:
         return "🔴 Habis"
 
-    if jumlah <= batas_minimum:
+    if total_stock <= batas_minimum:
         return "🟡 Menipis"
 
     return "🟢 Aman"
@@ -244,7 +244,6 @@ if missing_stock_cols:
     st.error(f"❌ Kolom stock_harian tidak ditemukan: {missing_stock_cols}")
     st.stop()
 
-# Optional tapi dibutuhkan untuk fitur keuntungan karyawan
 if "Harga Beli" not in stock_df.columns:
     stock_df["Harga Beli"] = 0
     st.warning("⚠️ Kolom 'Harga Beli' belum ditemukan. Keuntungan karyawan akan terbaca Rp 0.")
@@ -289,14 +288,13 @@ stock_df["Terjual"] = pd.to_numeric(
 
 # ==========================================
 # KEUNTUNGAN KARYAWAN
-# Sesuai request: Terjual x Harga Beli
+# Rumus: Terjual x Harga Beli
 # ==========================================
 stock_df["Keuntungan Karyawan"] = (
     stock_df["Terjual"] *
     stock_df["Harga Beli"]
 )
 
-# Tambahan optional untuk pembanding revenue
 stock_df["Estimasi Margin"] = (
     stock_df["Uang Seharusnya Dibayar"] -
     stock_df["Keuntungan Karyawan"]
@@ -507,6 +505,23 @@ inventory_df["Jumlah"] = pd.to_numeric(
     errors="coerce"
 ).fillna(0)
 
+# ==========================================
+# STOCK DISPLAY INVENTORY
+# Total Stock = Jumlah + Stock Display
+# ==========================================
+if "Stock Display" not in inventory_df.columns:
+    inventory_df["Stock Display"] = 0
+
+inventory_df["Stock Display"] = pd.to_numeric(
+    inventory_df["Stock Display"],
+    errors="coerce"
+).fillna(0)
+
+inventory_df["Total Stock"] = (
+    inventory_df["Jumlah"] +
+    inventory_df["Stock Display"]
+)
+
 if "Restock" not in inventory_df.columns:
     inventory_df["Restock"] = 0
 
@@ -523,6 +538,8 @@ inventory_latest_df = (
     .copy()
 )
 
+# Kalau ada kolom Stock Awal, pakai itu.
+# Kalau tidak ada, stock awal = Total Stock tertinggi historis.
 if "Stock Awal" in inventory_df.columns:
     stock_awal_df = inventory_df[["Produk", "Stock Awal"]].copy()
 
@@ -541,9 +558,9 @@ if "Stock Awal" in inventory_df.columns:
 else:
     stock_awal_df = (
         inventory_df
-        .groupby("Produk", as_index=False)["Jumlah"]
+        .groupby("Produk", as_index=False)["Total Stock"]
         .max()
-        .rename(columns={"Jumlah": "Stock Awal"})
+        .rename(columns={"Total Stock": "Stock Awal"})
     )
 
 inventory_latest_df = inventory_latest_df.merge(
@@ -554,7 +571,7 @@ inventory_latest_df = inventory_latest_df.merge(
 
 inventory_latest_df["Stock Awal"] = (
     inventory_latest_df["Stock Awal"]
-    .fillna(inventory_latest_df["Jumlah"])
+    .fillna(inventory_latest_df["Total Stock"])
 )
 
 # Batas minimum 10% dari stock awal, dibulatkan ke bawah
@@ -569,7 +586,7 @@ inventory_latest_df["Status Inventory"] = inventory_latest_df.apply(
 
 inventory_latest_df["Saran Restock"] = (
     inventory_latest_df["Stock Awal"] -
-    inventory_latest_df["Jumlah"]
+    inventory_latest_df["Total Stock"]
 )
 
 inventory_latest_df.loc[
@@ -664,7 +681,9 @@ if menu == "Inventory Restock":
 
     st.markdown("""
     Monitoring inventory untuk menentukan produk yang **habis** atau **menipis**.  
-    Produk dianggap menipis jika jumlah inventory sudah berada di bawah atau sama dengan **10% dari stock awal**.
+    Produk dianggap menipis jika **Total Stock** sudah berada di bawah atau sama dengan **10% dari Stock Awal**.
+
+    **Total Stock = Jumlah + Stock Display**
     """)
 
     st.divider()
@@ -689,6 +708,8 @@ if menu == "Inventory Restock":
         .sum()
     )
 
+    total_stock_inventory = inventory_latest_df["Total Stock"].sum()
+
     total_saran_restock = inventory_latest_df[
         inventory_latest_df["Status Inventory"].isin(["🔴 Habis", "🟡 Menipis"])
     ]["Saran Restock"].sum()
@@ -698,7 +719,14 @@ if menu == "Inventory Restock":
     col_i1.metric("📋 Total Produk", int(total_produk_inventory))
     col_i2.metric("🔴 Habis", int(total_habis))
     col_i3.metric("🟡 Menipis", int(total_menipis))
-    col_i4.metric("📦 Saran Qty Restock", int(total_saran_restock))
+    col_i4.metric("📦 Total Stock", int(total_stock_inventory))
+
+    col_i5, col_i6, col_i7, col_i8 = st.columns(4)
+
+    col_i5.metric("🟢 Aman", int(total_aman))
+    col_i6.metric("📦 Saran Qty Restock", int(total_saran_restock))
+    col_i7.metric("🏬 Stock Inventory", int(inventory_latest_df["Jumlah"].sum()))
+    col_i8.metric("🧺 Stock Display", int(inventory_latest_df["Stock Display"].sum()))
 
     st.divider()
 
@@ -717,6 +745,8 @@ if menu == "Inventory Restock":
                     "Tanggal",
                     "Produk",
                     "Jumlah",
+                    "Stock Display",
+                    "Total Stock",
                     "Stock Awal",
                     "Batas Minimum",
                     "Saran Restock",
@@ -727,7 +757,15 @@ if menu == "Inventory Restock":
             hide_index=True,
             column_config={
                 "Jumlah": st.column_config.NumberColumn(
-                    "Jumlah Sekarang",
+                    "Stock Inventory",
+                    format="%d"
+                ),
+                "Stock Display": st.column_config.NumberColumn(
+                    "Stock Display",
+                    format="%d"
+                ),
+                "Total Stock": st.column_config.NumberColumn(
+                    "Total Stock",
                     format="%d"
                 ),
                 "Stock Awal": st.column_config.NumberColumn(
@@ -782,7 +820,15 @@ if menu == "Inventory Restock":
         hide_index=True,
         column_config={
             "Jumlah": st.column_config.NumberColumn(
-                "Jumlah Sekarang",
+                "Stock Inventory",
+                format="%d"
+            ),
+            "Stock Display": st.column_config.NumberColumn(
+                "Stock Display",
+                format="%d"
+            ),
+            "Total Stock": st.column_config.NumberColumn(
+                "Total Stock",
                 format="%d"
             ),
             "Stock Awal": st.column_config.NumberColumn(

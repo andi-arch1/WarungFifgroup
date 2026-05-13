@@ -230,7 +230,7 @@ required_stock_cols = [
     "Tanggal",
     "Lantai",
     "Nama Produk",
-    "HargaJual",
+    "Harga Jual",
     "Terjual",
     "Uang Seharusnya Dibayar"
 ]
@@ -257,7 +257,7 @@ stock_df["Nama Produk"] = (
 )
 
 stock_df["Lantai"] = stock_df["Lantai"].apply(format_lantai)
-stock_df["HargaJual"] = stock_df["HargaJual"].apply(clean_rupiah)
+stock_df["Harga Jual"] = stock_df["Harga Jual"].apply(clean_rupiah)
 
 stock_df["Uang Seharusnya Dibayar"] = (
     stock_df["Uang Seharusnya Dibayar"]

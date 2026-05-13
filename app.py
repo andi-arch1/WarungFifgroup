@@ -158,6 +158,15 @@ def get_stock_status(selisih):
         return "🔴 Tidak Patuh"
 
 
+def get_untung_rugi_status(selisih):
+    if selisih == 0:
+        return "🟢 Impas / Match"
+    elif selisih > 0:
+        return "🔵 Untung / Lebih"
+    else:
+        return "🔴 Rugi / Kurang"
+
+
 def rupiah(value):
     return f"Rp {value:,.0f}".replace(",", ".")
 
@@ -275,8 +284,6 @@ master_df["Actual"] = pd.to_numeric(
     errors="coerce"
 ).fillna(0)
 
-# Kalau Display sudah ada di file, pakai Display dari file.
-# Kalau belum ada, hitung otomatis dari Jumlah - Actual.
 if "Display" in master_df.columns:
     master_df["Display"] = pd.to_numeric(
         master_df["Display"],
@@ -334,7 +341,7 @@ required_stock_cols = [
     "Tanggal",
     "Lantai",
     "Nama Produk",
-    "HargaJual",
+    "Harga Jual",
     "Terjual",
     "Uang Seharusnya Dibayar"
 ]
@@ -348,7 +355,7 @@ if missing_stock_cols:
     st.error(f"❌ Kolom stock tidak ditemukan: {missing_stock_cols}")
     st.info(
         "Pastikan stock_harian.xlsx punya kolom: "
-        "Tanggal, Lantai, Nama Produk, HargaJual, Terjual, Uang Seharusnya Dibayar."
+        "Tanggal, Lantai, Nama Produk, Harga Jual, Terjual, Uang Seharusnya Dibayar."
     )
     st.stop()
 
@@ -369,7 +376,7 @@ stock_df["Nama Produk"] = (
 
 stock_df["Lantai"] = stock_df["Lantai"].apply(format_lantai)
 
-stock_df["HargaJual"] = stock_df["HargaJual"].apply(clean_rupiah)
+stock_df["Harga Jual"] = stock_df["Harga Jual"].apply(clean_rupiah)
 
 stock_df["Uang Seharusnya Dibayar"] = (
     stock_df["Uang Seharusnya Dibayar"]
@@ -383,7 +390,6 @@ stock_df["Terjual"] = pd.to_numeric(
 
 # ==========================================
 # STOCK COMPLIANCE CHECK
-# Stock Sore Olsera vs Stock Sore
 # ==========================================
 stock_compliance_available = (
     "Stock Sore Olsera" in stock_df.columns and
@@ -554,6 +560,103 @@ filtered_qris_df = qris_df[
 ].copy()
 
 # ==========================================
+# REKONSILIASI DATA
+# ==========================================
+expected_df = (
+    filtered_stock_df
+    .groupby(["Tanggal", "Lantai"])["Uang Seharusnya Dibayar"]
+    .sum()
+    .reset_index()
+)
+
+actual_df = (
+    filtered_qris_df
+    .groupby(["Tanggal", "Lantai"])["Total Terbayar"]
+    .sum()
+    .reset_index()
+)
+
+rekon_df = expected_df.merge(
+    actual_df,
+    on=["Tanggal", "Lantai"],
+    how="left"
+)
+
+rekon_df["Total Terbayar"] = rekon_df["Total Terbayar"].fillna(0)
+
+rekon_df["Selisih"] = (
+    rekon_df["Total Terbayar"] -
+    rekon_df["Uang Seharusnya Dibayar"]
+)
+
+rekon_df["Status"] = rekon_df["Selisih"].apply(get_rekon_status)
+
+rekon_df = rekon_df.sort_values(
+    by=["Tanggal", "Lantai"],
+    ascending=[True, True]
+)
+
+# ==========================================
+# UNTUNG RUGI PER LANTAI
+# ==========================================
+expected_lantai_df = (
+    filtered_stock_df
+    .groupby("Lantai")["Uang Seharusnya Dibayar"]
+    .sum()
+    .reset_index()
+)
+
+actual_lantai_df = (
+    filtered_qris_df
+    .groupby("Lantai")["Total Terbayar"]
+    .sum()
+    .reset_index()
+)
+
+untung_rugi_lantai_df = expected_lantai_df.merge(
+    actual_lantai_df,
+    on="Lantai",
+    how="outer"
+)
+
+untung_rugi_lantai_df["Uang Seharusnya Dibayar"] = (
+    untung_rugi_lantai_df["Uang Seharusnya Dibayar"]
+    .fillna(0)
+)
+
+untung_rugi_lantai_df["Total Terbayar"] = (
+    untung_rugi_lantai_df["Total Terbayar"]
+    .fillna(0)
+)
+
+untung_rugi_lantai_df["Selisih"] = (
+    untung_rugi_lantai_df["Total Terbayar"] -
+    untung_rugi_lantai_df["Uang Seharusnya Dibayar"]
+)
+
+untung_rugi_lantai_df["Status"] = (
+    untung_rugi_lantai_df["Selisih"]
+    .apply(get_untung_rugi_status)
+)
+
+lantai_order = {
+    "Lantai 3": 1,
+    "Lantai 8": 2,
+    "Lantai 9": 3
+}
+
+untung_rugi_lantai_df["Urutan"] = (
+    untung_rugi_lantai_df["Lantai"]
+    .map(lantai_order)
+)
+
+untung_rugi_lantai_df = (
+    untung_rugi_lantai_df
+    .sort_values("Urutan")
+    .drop(columns=["Urutan"])
+)
+
+# ==========================================
 # STOCK SUMMARY PER LANTAI
 # ==========================================
 if stock_compliance_available and not filtered_stock_df.empty:
@@ -574,12 +677,6 @@ if stock_compliance_available and not filtered_stock_df.empty:
     ].apply(
         lambda x: "🟢 Patuh" if x == 0 else "🔴 Tidak Patuh"
     )
-
-    lantai_order = {
-        "Lantai 3": 1,
-        "Lantai 8": 2,
-        "Lantai 9": 3
-    }
 
     stock_summary_lantai_df["Urutan"] = stock_summary_lantai_df["Lantai"].map(lantai_order)
 
@@ -620,12 +717,6 @@ if not filtered_master_df.empty:
         ),
         axis=1
     )
-
-    lantai_order = {
-        "Lantai 3": 1,
-        "Lantai 8": 2,
-        "Lantai 9": 3
-    }
 
     display_summary_lantai_df["Urutan"] = display_summary_lantai_df["Lantai"].map(lantai_order)
 
@@ -669,6 +760,61 @@ col4.metric(
     "⚠️ Selisih",
     rupiah(total_selisih)
 )
+
+st.divider()
+
+# ==========================================
+# RINGKASAN UNTUNG RUGI PER LANTAI
+# ==========================================
+st.subheader("💸 Ringkasan Untung / Rugi per Lantai")
+
+col_u3, col_u8, col_u9 = st.columns(3)
+
+for col, lantai in zip(
+    [col_u3, col_u8, col_u9],
+    ["Lantai 3", "Lantai 8", "Lantai 9"]
+):
+    data_lantai = untung_rugi_lantai_df[
+        untung_rugi_lantai_df["Lantai"] == lantai
+    ]
+
+    if data_lantai.empty:
+        col.metric(
+            f"🏢 {lantai}",
+            "Tidak Ada Data"
+        )
+    else:
+        selisih = data_lantai["Selisih"].iloc[0]
+        status = data_lantai["Status"].iloc[0]
+
+        col.metric(
+            f"🏢 {lantai}",
+            rupiah(selisih),
+            status.replace("🔵 ", "").replace("🔴 ", "").replace("🟢 ", "")
+        )
+
+if untung_rugi_lantai_df.empty:
+    st.info("Belum ada data untung/rugi untuk filter ini.")
+else:
+    st.dataframe(
+        untung_rugi_lantai_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Uang Seharusnya Dibayar": st.column_config.NumberColumn(
+                "Expected Revenue",
+                format="Rp %d"
+            ),
+            "Total Terbayar": st.column_config.NumberColumn(
+                "Actual QRIS",
+                format="Rp %d"
+            ),
+            "Selisih": st.column_config.NumberColumn(
+                "Selisih",
+                format="Rp %d"
+            ),
+        }
+    )
 
 st.divider()
 
@@ -996,43 +1142,6 @@ for lantai, tab in display_tabs.items():
 st.divider()
 
 # ==========================================
-# REKONSILIASI DATA
-# ==========================================
-expected_df = (
-    filtered_stock_df
-    .groupby(["Tanggal", "Lantai"])["Uang Seharusnya Dibayar"]
-    .sum()
-    .reset_index()
-)
-
-actual_df = (
-    filtered_qris_df
-    .groupby(["Tanggal", "Lantai"])["Total Terbayar"]
-    .sum()
-    .reset_index()
-)
-
-rekon_df = expected_df.merge(
-    actual_df,
-    on=["Tanggal", "Lantai"],
-    how="left"
-)
-
-rekon_df["Total Terbayar"] = rekon_df["Total Terbayar"].fillna(0)
-
-rekon_df["Selisih"] = (
-    rekon_df["Total Terbayar"] -
-    rekon_df["Uang Seharusnya Dibayar"]
-)
-
-rekon_df["Status"] = rekon_df["Selisih"].apply(get_rekon_status)
-
-rekon_df = rekon_df.sort_values(
-    by=["Tanggal", "Lantai"],
-    ascending=[True, True]
-)
-
-# ==========================================
 # CHART EXPECTED VS ACTUAL
 # ==========================================
 st.subheader("📈 Expected vs Actual QRIS")
@@ -1116,8 +1225,8 @@ st.divider()
 st.subheader("📦 Detail Penjualan Stock")
 
 stock_column_config = {
-    "HargaJual": st.column_config.NumberColumn(
-        "HargaJual",
+    "Harga Jual": st.column_config.NumberColumn(
+        "Harga Jual",
         format="Rp %d"
     ),
     "Uang Seharusnya Dibayar": st.column_config.NumberColumn(
@@ -1235,6 +1344,12 @@ with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
     rekon_df.to_excel(
         writer,
         sheet_name="Rekonsiliasi",
+        index=False
+    )
+
+    untung_rugi_lantai_df.to_excel(
+        writer,
+        sheet_name="Untung Rugi Lantai",
         index=False
     )
 

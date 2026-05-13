@@ -44,23 +44,23 @@ h1, h2, h3 {
 """, unsafe_allow_html=True)
 
 # ==========================================
-# HEADER
-# ==========================================
-st.title("🛒 Dashboard Warung FIFGROUP")
-
-st.markdown("""
-Monitoring Penjualan Harian, Rekonsiliasi QRIS, Kepatuhan Stock, dan Standar Display  
-📍 Warung FIFGROUP Lantai 3 • Lantai 8 • Lantai 9
-""")
-
-st.divider()
-
-# ==========================================
 # FILE PATH
 # ==========================================
-master_file = "data/master_data.xlsx"
 stock_file = "data/stock_harian.xlsx"
 qris_file = "data/qris_all.xlsx"
+
+# ==========================================
+# SIDEBAR MENU
+# ==========================================
+st.sidebar.title("🛒 Warung FIFGROUP")
+
+menu = st.sidebar.radio(
+    "Pilih Menu",
+    [
+        "Dashboard Utama",
+        "Inventory Restock"
+    ]
+)
 
 # ==========================================
 # HELPER FUNCTIONS
@@ -167,26 +167,153 @@ def get_untung_rugi_status(selisih):
         return "🔴 Rugi / Kurang"
 
 
+def get_inventory_status(row):
+    jumlah = row["Jumlah"]
+    batas_minimum = row["Batas Minimum"]
+
+    if jumlah <= 0:
+        return "🔴 Habis"
+
+    if jumlah <= batas_minimum:
+        return "🟡 Menipis"
+
+    return "🟢 Aman"
+
+
 def rupiah(value):
     return f"Rp {value:,.0f}".replace(",", ".")
 
 
 # ==========================================
-# LOAD MASTER DATA - MULTIPLE SHEETS
+# LOAD STOCK WORKBOOK
 # ==========================================
 try:
-    master_sheets = pd.read_excel(
-        master_file,
+    workbook_sheets = pd.read_excel(
+        stock_file,
         sheet_name=None
     )
 
 except Exception as e:
-    st.error(f"❌ Error membaca master data: {e}")
+    st.error(f"❌ Error membaca stock_harian.xlsx: {e}")
     st.stop()
+
+# ==========================================
+# VALIDATE REQUIRED SHEETS
+# ==========================================
+required_sheets = [
+    "stock_harian",
+    "Inventory"
+]
+
+missing_sheets = [
+    sheet for sheet in required_sheets
+    if sheet not in workbook_sheets.keys()
+]
+
+if missing_sheets:
+    st.error(f"❌ Sheet tidak ditemukan di stock_harian.xlsx: {missing_sheets}")
+    st.stop()
+
+# ==========================================
+# LOAD STOCK_HARIAN SHEET
+# ==========================================
+stock_df = workbook_sheets["stock_harian"].copy()
+
+stock_df.columns = (
+    stock_df.columns
+    .astype(str)
+    .str.strip()
+    .str.replace("\ufeff", "")
+)
+
+required_stock_cols = [
+    "Tanggal",
+    "Lantai",
+    "Nama Produk",
+    "HargaJual",
+    "Terjual",
+    "Uang Seharusnya Dibayar"
+]
+
+missing_stock_cols = [
+    col for col in required_stock_cols
+    if col not in stock_df.columns
+]
+
+if missing_stock_cols:
+    st.error(f"❌ Kolom stock_harian tidak ditemukan: {missing_stock_cols}")
+    st.stop()
+
+stock_df["Tanggal"] = pd.to_datetime(
+    stock_df["Tanggal"],
+    errors="coerce",
+    dayfirst=True
+).dt.date
+
+stock_df["Nama Produk"] = (
+    stock_df["Nama Produk"]
+    .astype(str)
+    .str.strip()
+)
+
+stock_df["Lantai"] = stock_df["Lantai"].apply(format_lantai)
+stock_df["HargaJual"] = stock_df["HargaJual"].apply(clean_rupiah)
+
+stock_df["Uang Seharusnya Dibayar"] = (
+    stock_df["Uang Seharusnya Dibayar"]
+    .apply(clean_rupiah)
+)
+
+stock_df["Terjual"] = pd.to_numeric(
+    stock_df["Terjual"],
+    errors="coerce"
+).fillna(0)
+
+# ==========================================
+# STOCK COMPLIANCE CHECK
+# ==========================================
+stock_compliance_available = (
+    "Stock Sore Olsera" in stock_df.columns and
+    "Stock Sore" in stock_df.columns
+)
+
+if stock_compliance_available:
+    stock_df["Stock Sore Olsera"] = pd.to_numeric(
+        stock_df["Stock Sore Olsera"],
+        errors="coerce"
+    ).fillna(0)
+
+    stock_df["Stock Sore"] = pd.to_numeric(
+        stock_df["Stock Sore"],
+        errors="coerce"
+    ).fillna(0)
+
+    stock_df["Selisih Stock"] = (
+        stock_df["Stock Sore"] -
+        stock_df["Stock Sore Olsera"]
+    )
+
+    stock_df["Status Stock"] = stock_df["Selisih Stock"].apply(get_stock_status)
+
+else:
+    st.warning(
+        "⚠️ Kolom 'Stock Sore Olsera' dan/atau 'Stock Sore' tidak ditemukan. "
+        "Cek kepatuhan stock tidak ditampilkan."
+    )
+
+# ==========================================
+# LOAD DISPLAY MASTER SHEETS
+# lantai3, lantai8, lantai9
+# ==========================================
+display_sheet_names = [
+    sheet for sheet in workbook_sheets.keys()
+    if str(sheet).strip().lower() in ["lantai3", "lantai8", "lantai9"]
+]
 
 master_list = []
 
-for sheet_name, df in master_sheets.items():
+for sheet_name in display_sheet_names:
+    df = workbook_sheets[sheet_name].copy()
 
     if df.empty:
         continue
@@ -203,10 +330,6 @@ for sheet_name, df in master_sheets.items():
     if "Produk" in df.columns and "Nama Produk" not in df.columns:
         rename_cols["Produk"] = "Nama Produk"
 
-    for col in df.columns:
-        if col.lower() == "product" and "Nama Produk" not in df.columns:
-            rename_cols[col] = "Nama Produk"
-
     if "Standar Display" in df.columns and "Jumlah" not in df.columns:
         rename_cols["Standar Display"] = "Jumlah"
 
@@ -216,20 +339,20 @@ for sheet_name, df in master_sheets.items():
     if "Stock Display" in df.columns and "Display" not in df.columns:
         rename_cols["Stock Display"] = "Display"
 
+    if "lantai" in df.columns and "Lantai" not in df.columns:
+        rename_cols["lantai"] = "Lantai"
+
     df = df.rename(columns=rename_cols)
 
-    if "Lantai" not in df.columns and "lantai" not in df.columns:
+    if "Lantai" not in df.columns:
         df["Lantai"] = lantai_from_sheet_name(sheet_name)
-
-    if "lantai" in df.columns and "Lantai" not in df.columns:
-        df = df.rename(columns={"lantai": "Lantai"})
 
     df["Source Sheet"] = sheet_name
 
     master_list.append(df)
 
 if len(master_list) == 0:
-    st.error("❌ master_data.xlsx kosong atau tidak ada data yang terbaca.")
+    st.error("❌ Sheet lantai3/lantai8/lantai9 tidak ditemukan atau kosong.")
     st.stop()
 
 master_df = pd.concat(
@@ -237,9 +360,6 @@ master_df = pd.concat(
     ignore_index=True
 )
 
-# ==========================================
-# VALIDATE MASTER COLUMNS
-# ==========================================
 required_master_cols = [
     "Tanggal",
     "Nama Produk",
@@ -253,13 +373,9 @@ missing_master_cols = [
 ]
 
 if missing_master_cols:
-    st.error(f"❌ Kolom master data tidak ditemukan: {missing_master_cols}")
-    st.info("Pastikan tiap sheet master punya kolom minimal: Tanggal, Produk/Nama Produk, Jumlah, Actual.")
+    st.error(f"❌ Kolom master display tidak ditemukan: {missing_master_cols}")
     st.stop()
 
-# ==========================================
-# CLEAN MASTER DATA
-# ==========================================
 master_df["Tanggal"] = pd.to_datetime(
     master_df["Tanggal"],
     errors="coerce",
@@ -315,110 +431,128 @@ if "Notes" not in master_df.columns:
     master_df["Notes"] = ""
 
 # ==========================================
-# LOAD STOCK DATA
+# LOAD INVENTORY SHEET
 # ==========================================
-try:
-    stock_df = pd.read_excel(stock_file)
+inventory_df = workbook_sheets["Inventory"].copy()
 
-except Exception as e:
-    st.error(f"❌ Error membaca stock file: {e}")
-    st.stop()
-
-# ==========================================
-# CLEAN STOCK COLUMNS
-# ==========================================
-stock_df.columns = (
-    stock_df.columns
+inventory_df.columns = (
+    inventory_df.columns
     .astype(str)
     .str.strip()
     .str.replace("\ufeff", "")
 )
 
-# ==========================================
-# VALIDATE STOCK COLUMNS
-# ==========================================
-required_stock_cols = [
+required_inventory_cols = [
     "Tanggal",
-    "Lantai",
-    "Nama Produk",
-    "HargaJual",
-    "Terjual",
-    "Uang Seharusnya Dibayar"
+    "Produk",
+    "Jumlah"
 ]
 
-missing_stock_cols = [
-    col for col in required_stock_cols
-    if col not in stock_df.columns
+missing_inventory_cols = [
+    col for col in required_inventory_cols
+    if col not in inventory_df.columns
 ]
 
-if missing_stock_cols:
-    st.error(f"❌ Kolom stock tidak ditemukan: {missing_stock_cols}")
-    st.info(
-        "Pastikan stock_harian.xlsx punya kolom: "
-        "Tanggal, Lantai, Nama Produk, HargaJual, Terjual, Uang Seharusnya Dibayar."
-    )
+if missing_inventory_cols:
+    st.error(f"❌ Kolom Inventory tidak ditemukan: {missing_inventory_cols}")
     st.stop()
 
-# ==========================================
-# CLEAN STOCK DATA
-# ==========================================
-stock_df["Tanggal"] = pd.to_datetime(
-    stock_df["Tanggal"],
+inventory_df["Tanggal"] = pd.to_datetime(
+    inventory_df["Tanggal"],
     errors="coerce",
     dayfirst=True
 ).dt.date
 
-stock_df["Nama Produk"] = (
-    stock_df["Nama Produk"]
+inventory_df["Produk"] = (
+    inventory_df["Produk"]
     .astype(str)
     .str.strip()
 )
 
-stock_df["Lantai"] = stock_df["Lantai"].apply(format_lantai)
-
-stock_df["HargaJual"] = stock_df["HargaJual"].apply(clean_rupiah)
-
-stock_df["Uang Seharusnya Dibayar"] = (
-    stock_df["Uang Seharusnya Dibayar"]
-    .apply(clean_rupiah)
-)
-
-stock_df["Terjual"] = pd.to_numeric(
-    stock_df["Terjual"],
+inventory_df["Jumlah"] = pd.to_numeric(
+    inventory_df["Jumlah"],
     errors="coerce"
 ).fillna(0)
 
-# ==========================================
-# STOCK COMPLIANCE CHECK
-# ==========================================
-stock_compliance_available = (
-    "Stock Sore Olsera" in stock_df.columns and
-    "Stock Sore" in stock_df.columns
+if "Restock" not in inventory_df.columns:
+    inventory_df["Restock"] = 0
+
+inventory_df["Restock"] = pd.to_numeric(
+    inventory_df["Restock"],
+    errors="coerce"
+).fillna(0)
+
+# Ambil data inventory terakhir per produk
+inventory_latest_df = (
+    inventory_df
+    .sort_values("Tanggal")
+    .groupby("Produk", as_index=False)
+    .tail(1)
+    .copy()
 )
 
-if stock_compliance_available:
-    stock_df["Stock Sore Olsera"] = pd.to_numeric(
-        stock_df["Stock Sore Olsera"],
-        errors="coerce"
-    ).fillna(0)
-
-    stock_df["Stock Sore"] = pd.to_numeric(
-        stock_df["Stock Sore"],
-        errors="coerce"
-    ).fillna(0)
-
-    stock_df["Selisih Stock"] = (
-        stock_df["Stock Sore"] -
-        stock_df["Stock Sore Olsera"]
+# Kalau ada kolom Stock Awal, pakai itu.
+# Kalau belum ada, stock awal dihitung dari jumlah maksimum historis per produk.
+if "Stock Awal" in inventory_df.columns:
+    stock_awal_df = (
+        inventory_df[["Produk", "Stock Awal"]]
+        .copy()
     )
 
-    stock_df["Status Stock"] = stock_df["Selisih Stock"].apply(get_stock_status)
+    stock_awal_df["Stock Awal"] = pd.to_numeric(
+        stock_awal_df["Stock Awal"],
+        errors="coerce"
+    )
+
+    stock_awal_df = (
+        stock_awal_df
+        .dropna(subset=["Stock Awal"])
+        .groupby("Produk", as_index=False)["Stock Awal"]
+        .max()
+    )
 
 else:
-    st.warning(
-        "⚠️ Kolom 'Stock Sore Olsera' dan/atau 'Stock Sore' tidak ditemukan. "
-        "Cek kepatuhan stock tidak ditampilkan."
+    stock_awal_df = (
+        inventory_df
+        .groupby("Produk", as_index=False)["Jumlah"]
+        .max()
+        .rename(columns={"Jumlah": "Stock Awal"})
     )
+
+inventory_latest_df = inventory_latest_df.merge(
+    stock_awal_df,
+    on="Produk",
+    how="left"
+)
+
+inventory_latest_df["Stock Awal"] = (
+    inventory_latest_df["Stock Awal"]
+    .fillna(inventory_latest_df["Jumlah"])
+)
+
+inventory_latest_df["Batas Minimum"] = (
+    inventory_latest_df["Stock Awal"] * 0.10
+)
+
+inventory_latest_df["Status Inventory"] = inventory_latest_df.apply(
+    get_inventory_status,
+    axis=1
+)
+
+inventory_latest_df["Saran Restock"] = (
+    inventory_latest_df["Stock Awal"] -
+    inventory_latest_df["Jumlah"]
+)
+
+inventory_latest_df.loc[
+    inventory_latest_df["Saran Restock"] < 0,
+    "Saran Restock"
+] = 0
+
+inventory_latest_df = inventory_latest_df.sort_values(
+    by=["Status Inventory", "Produk"],
+    ascending=[True, True]
+)
 
 # ==========================================
 # LOAD QRIS EXCEL
@@ -427,12 +561,9 @@ try:
     qris_df = pd.read_excel(qris_file)
 
 except Exception as e:
-    st.error(f"❌ Error membaca Excel QRIS: {e}")
+    st.error(f"❌ Error membaca qris_all.xlsx: {e}")
     st.stop()
 
-# ==========================================
-# CLEAN QRIS COLUMNS
-# ==========================================
 qris_df.columns = (
     qris_df.columns
     .astype(str)
@@ -440,9 +571,6 @@ qris_df.columns = (
     .str.replace("\ufeff", "")
 )
 
-# ==========================================
-# VALIDATE QRIS COLUMNS
-# ==========================================
 required_qris_cols = [
     "Nama Merchant",
     "Tanggal Transaksi",
@@ -456,12 +584,8 @@ missing_qris_cols = [
 
 if missing_qris_cols:
     st.error(f"❌ Kolom QRIS tidak ditemukan: {missing_qris_cols}")
-    st.info("Pastikan qris_all.xlsx punya kolom: Nama Merchant, Tanggal Transaksi, Total Terbayar.")
     st.stop()
 
-# ==========================================
-# CLEAN QRIS DATA
-# ==========================================
 qris_df["Tanggal"] = pd.to_datetime(
     qris_df["Tanggal Transaksi"],
     errors="coerce",
@@ -480,9 +604,6 @@ for col in qris_money_cols:
     if col in qris_df.columns:
         qris_df[col] = qris_df[col].apply(clean_rupiah)
 
-# ==========================================
-# MERCHANT MAPPING
-# ==========================================
 merchant_mapping = {
     "Warung FIFGROUP 1": "Lantai 3",
     "Warung FIFGROUP 2": "Lantai 8",
@@ -505,6 +626,197 @@ unknown_merchants = (
 
 if len(unknown_merchants) > 0:
     st.warning(f"⚠️ Ada Nama Merchant yang belum dimapping: {list(unknown_merchants)}")
+
+# ==========================================
+# INVENTORY RESTOCK PAGE
+# ==========================================
+if menu == "Inventory Restock":
+
+    st.title("📦 Inventory Restock")
+
+    st.markdown("""
+    Monitoring inventory untuk menentukan produk yang **habis** atau **menipis**.  
+    Produk dianggap menipis jika jumlah inventory sudah berada di bawah atau sama dengan **10% dari stock awal**.
+    """)
+
+    st.divider()
+
+    total_produk_inventory = len(inventory_latest_df)
+
+    total_habis = (
+        inventory_latest_df["Status Inventory"]
+        .eq("🔴 Habis")
+        .sum()
+    )
+
+    total_menipis = (
+        inventory_latest_df["Status Inventory"]
+        .eq("🟡 Menipis")
+        .sum()
+    )
+
+    total_aman = (
+        inventory_latest_df["Status Inventory"]
+        .eq("🟢 Aman")
+        .sum()
+    )
+
+    total_saran_restock = inventory_latest_df[
+        inventory_latest_df["Status Inventory"].isin(["🔴 Habis", "🟡 Menipis"])
+    ]["Saran Restock"].sum()
+
+    col_i1, col_i2, col_i3, col_i4 = st.columns(4)
+
+    col_i1.metric("📋 Total Produk", int(total_produk_inventory))
+    col_i2.metric("🔴 Habis", int(total_habis))
+    col_i3.metric("🟡 Menipis", int(total_menipis))
+    col_i4.metric("📦 Saran Qty Restock", int(total_saran_restock))
+
+    st.divider()
+
+    st.subheader("🚨 Produk Perlu Restock ke Supplier")
+
+    restock_supplier_df = inventory_latest_df[
+        inventory_latest_df["Status Inventory"].isin(["🔴 Habis", "🟡 Menipis"])
+    ].copy()
+
+    if restock_supplier_df.empty:
+        st.success("✅ Semua inventory masih aman. Belum perlu restock supplier.")
+    else:
+        st.dataframe(
+            restock_supplier_df[
+                [
+                    "Tanggal",
+                    "Produk",
+                    "Jumlah",
+                    "Stock Awal",
+                    "Batas Minimum",
+                    "Saran Restock",
+                    "Status Inventory"
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Jumlah": st.column_config.NumberColumn(
+                    "Jumlah Sekarang",
+                    format="%d"
+                ),
+                "Stock Awal": st.column_config.NumberColumn(
+                    "Stock Awal",
+                    format="%d"
+                ),
+                "Batas Minimum": st.column_config.NumberColumn(
+                    "Batas Minimum 10%",
+                    format="%.1f"
+                ),
+                "Saran Restock": st.column_config.NumberColumn(
+                    "Saran Restock",
+                    format="%d"
+                ),
+            }
+        )
+
+    st.divider()
+
+    st.subheader("📊 Status Inventory")
+
+    inventory_status_df = (
+        inventory_latest_df
+        .groupby("Status Inventory")
+        .size()
+        .reset_index(name="Jumlah Produk")
+    )
+
+    fig_inventory = px.bar(
+        inventory_status_df,
+        x="Status Inventory",
+        y="Jumlah Produk",
+        text_auto=True
+    )
+
+    fig_inventory.update_layout(
+        height=400
+    )
+
+    st.plotly_chart(
+        fig_inventory,
+        use_container_width=True
+    )
+
+    st.divider()
+
+    st.subheader("📋 Semua Data Inventory Terakhir")
+
+    st.dataframe(
+        inventory_latest_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Jumlah": st.column_config.NumberColumn(
+                "Jumlah Sekarang",
+                format="%d"
+            ),
+            "Stock Awal": st.column_config.NumberColumn(
+                "Stock Awal",
+                format="%d"
+            ),
+            "Batas Minimum": st.column_config.NumberColumn(
+                "Batas Minimum 10%",
+                format="%.1f"
+            ),
+            "Saran Restock": st.column_config.NumberColumn(
+                "Saran Restock",
+                format="%d"
+            ),
+        }
+    )
+
+    st.divider()
+
+    inventory_excel_buffer = BytesIO()
+
+    with pd.ExcelWriter(inventory_excel_buffer, engine="openpyxl") as writer:
+        restock_supplier_df.to_excel(
+            writer,
+            sheet_name="Perlu Restock",
+            index=False
+        )
+
+        inventory_latest_df.to_excel(
+            writer,
+            sheet_name="Inventory Terakhir",
+            index=False
+        )
+
+        inventory_df.to_excel(
+            writer,
+            sheet_name="Raw Inventory",
+            index=False
+        )
+
+    inventory_excel_buffer.seek(0)
+
+    st.download_button(
+        label="⬇️ Download Data Inventory Restock",
+        data=inventory_excel_buffer,
+        file_name="inventory_restock_supplier.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    st.stop()
+
+# ==========================================
+# DASHBOARD UTAMA PAGE
+# ==========================================
+st.title("🛒 Dashboard Warung FIFGROUP")
+
+st.markdown("""
+Monitoring Penjualan Harian, Rekonsiliasi QRIS, Kepatuhan Stock, dan Standar Display  
+📍 Warung FIFGROUP Lantai 3 • Lantai 8 • Lantai 9
+""")
+
+st.divider()
 
 # ==========================================
 # FILTER SECTION
@@ -741,25 +1053,10 @@ st.subheader("📌 Ringkasan Rekonsiliasi")
 
 col1, col2, col3, col4 = st.columns(4)
 
-col1.metric(
-    "💰 Expected Revenue",
-    rupiah(total_expected)
-)
-
-col2.metric(
-    "💳 Actual QRIS",
-    rupiah(total_qris)
-)
-
-col3.metric(
-    "📦 Produk Terjual",
-    f"{int(total_terjual)}"
-)
-
-col4.metric(
-    "⚠️ Selisih",
-    rupiah(total_selisih)
-)
+col1.metric("💰 Expected Revenue", rupiah(total_expected))
+col2.metric("💳 Actual QRIS", rupiah(total_qris))
+col3.metric("📦 Produk Terjual", f"{int(total_terjual)}")
+col4.metric("⚠️ Selisih", rupiah(total_selisih))
 
 st.divider()
 
@@ -779,10 +1076,7 @@ for col, lantai in zip(
     ]
 
     if data_lantai.empty:
-        col.metric(
-            f"🏢 {lantai}",
-            "Tidak Ada Data"
-        )
+        col.metric(f"🏢 {lantai}", "Tidak Ada Data")
     else:
         selisih = data_lantai["Selisih"].iloc[0]
         status = data_lantai["Status"].iloc[0]
@@ -793,28 +1087,25 @@ for col, lantai in zip(
             status.replace("🔵 ", "").replace("🔴 ", "").replace("🟢 ", "")
         )
 
-if untung_rugi_lantai_df.empty:
-    st.info("Belum ada data untung/rugi untuk filter ini.")
-else:
-    st.dataframe(
-        untung_rugi_lantai_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Uang Seharusnya Dibayar": st.column_config.NumberColumn(
-                "Expected Revenue",
-                format="Rp %d"
-            ),
-            "Total Terbayar": st.column_config.NumberColumn(
-                "Actual QRIS",
-                format="Rp %d"
-            ),
-            "Selisih": st.column_config.NumberColumn(
-                "Selisih",
-                format="Rp %d"
-            ),
-        }
-    )
+st.dataframe(
+    untung_rugi_lantai_df,
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "Uang Seharusnya Dibayar": st.column_config.NumberColumn(
+            "Expected Revenue",
+            format="Rp %d"
+        ),
+        "Total Terbayar": st.column_config.NumberColumn(
+            "Actual QRIS",
+            format="Rp %d"
+        ),
+        "Selisih": st.column_config.NumberColumn(
+            "Selisih",
+            format="Rp %d"
+        ),
+    }
+)
 
 st.divider()
 
@@ -835,10 +1126,7 @@ if stock_compliance_available:
         ]
 
         if data_lantai.empty:
-            col.metric(
-                f"🏢 {lantai}",
-                "Tidak Ada Data"
-            )
+            col.metric(f"🏢 {lantai}", "Tidak Ada Data")
         else:
             item_selisih = int(data_lantai["Item_Selisih_Stock"].iloc[0])
             total_selisih = int(data_lantai["Total_Selisih_Stock"].iloc[0])
@@ -850,28 +1138,11 @@ if stock_compliance_available:
                 f"{item_selisih} item selisih | Total selisih: {total_selisih}"
             )
 
-    if stock_summary_lantai_df.empty:
-        st.info("Belum ada data kepatuhan stock untuk filter ini.")
-    else:
-        st.dataframe(
-            stock_summary_lantai_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Total_Item": st.column_config.NumberColumn(
-                    "Total Item",
-                    format="%d"
-                ),
-                "Item_Selisih_Stock": st.column_config.NumberColumn(
-                    "Item Selisih Stock",
-                    format="%d"
-                ),
-                "Total_Selisih_Stock": st.column_config.NumberColumn(
-                    "Total Selisih Stock",
-                    format="%d"
-                ),
-            }
-        )
+    st.dataframe(
+        stock_summary_lantai_df,
+        use_container_width=True,
+        hide_index=True
+    )
 
     st.divider()
 
@@ -911,20 +1182,9 @@ if stock_compliance_available:
 
                 col_a, col_b, col_c = st.columns(3)
 
-                col_a.metric(
-                    "📦 Item Tidak Patuh",
-                    int(total_item_selisih)
-                )
-
-                col_b.metric(
-                    "📊 Total Selisih Abs",
-                    int(total_selisih_abs)
-                )
-
-                col_c.metric(
-                    "🧾 Total Selisih Net",
-                    int(total_selisih_net)
-                )
+                col_a.metric("📦 Item Tidak Patuh", int(total_item_selisih))
+                col_b.metric("📊 Total Selisih Abs", int(total_selisih_abs))
+                col_c.metric("🧾 Total Selisih Net", int(total_selisih_net))
 
                 detail_stock_cols = [
                     "Tanggal",
@@ -944,21 +1204,7 @@ if stock_compliance_available:
                 st.dataframe(
                     detail_lantai_df[detail_stock_cols],
                     use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Stock Sore Olsera": st.column_config.NumberColumn(
-                            "Stock Sore Olsera",
-                            format="%d"
-                        ),
-                        "Stock Sore": st.column_config.NumberColumn(
-                            "Stock Sore",
-                            format="%d"
-                        ),
-                        "Selisih Stock": st.column_config.NumberColumn(
-                            "Selisih Stock",
-                            format="%d"
-                        ),
-                    }
+                    hide_index=True
                 )
 
     st.divider()
@@ -979,10 +1225,7 @@ for col, lantai in zip(
     ]
 
     if data_lantai.empty:
-        col.metric(
-            f"🏢 {lantai}",
-            "Tidak Ada Data"
-        )
+        col.metric(f"🏢 {lantai}", "Tidak Ada Data")
     else:
         total_item = int(data_lantai["Total_Item_Master"].iloc[0])
         sesuai = int(data_lantai["Sesuai_Standar"].iloc[0])
@@ -996,44 +1239,11 @@ for col, lantai in zip(
             f"{sesuai}/{total_item} sesuai | {perlu_restock} restock | Qty {total_qty_restock}"
         )
 
-if display_summary_lantai_df.empty:
-    st.info("Belum ada data standar display untuk filter ini.")
-else:
-    st.dataframe(
-        display_summary_lantai_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Total_Item_Master": st.column_config.NumberColumn(
-                "Total Item Master",
-                format="%d"
-            ),
-            "Sesuai_Standar": st.column_config.NumberColumn(
-                "Sesuai Standar",
-                format="%d"
-            ),
-            "Perlu_Restock": st.column_config.NumberColumn(
-                "Perlu Restock",
-                format="%d"
-            ),
-            "Display_Negatif": st.column_config.NumberColumn(
-                "Display Negatif",
-                format="%d"
-            ),
-            "Total_Qty_Restock": st.column_config.NumberColumn(
-                "Total Qty Restock",
-                format="%d"
-            ),
-        }
-    )
-
-total_display_negatif = (
-    display_summary_lantai_df["Display_Negatif"].sum()
-    if not display_summary_lantai_df.empty else 0
+st.dataframe(
+    display_summary_lantai_df,
+    use_container_width=True,
+    hide_index=True
 )
-
-if total_display_negatif > 0:
-    st.error(f"🚨 Ada {int(total_display_negatif)} baris dengan Display negatif. Cek input Actual/Jumlah.")
 
 st.divider()
 
@@ -1082,20 +1292,9 @@ for lantai, tab in display_tabs.items():
 
             col_a, col_b, col_c = st.columns(3)
 
-            col_a.metric(
-                "⚠️ Item Perlu Restock",
-                int(total_perlu_restock)
-            )
-
-            col_b.metric(
-                "🚨 Display Negatif",
-                int(total_display_negatif)
-            )
-
-            col_c.metric(
-                "📦 Qty Restock",
-                int(total_qty_restock)
-            )
+            col_a.metric("⚠️ Item Perlu Restock", int(total_perlu_restock))
+            col_b.metric("🚨 Display Negatif", int(total_display_negatif))
+            col_c.metric("📦 Qty Restock", int(total_qty_restock))
 
             display_detail_columns = [
                 "Tanggal",
@@ -1118,25 +1317,7 @@ for lantai, tab in display_tabs.items():
             st.dataframe(
                 detail_display_lantai_df[display_detail_columns],
                 use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Jumlah": st.column_config.NumberColumn(
-                        "Jumlah",
-                        format="%d"
-                    ),
-                    "Actual": st.column_config.NumberColumn(
-                        "Actual",
-                        format="%d"
-                    ),
-                    "Display": st.column_config.NumberColumn(
-                        "Display",
-                        format="%d"
-                    ),
-                    "Restock Dibutuhkan": st.column_config.NumberColumn(
-                        "Restock Dibutuhkan",
-                        format="%d"
-                    ),
-                }
+                hide_index=True
             )
 
 st.divider()
@@ -1224,38 +1405,10 @@ st.divider()
 # ==========================================
 st.subheader("📦 Detail Penjualan Stock")
 
-stock_column_config = {
-    "HargaJual": st.column_config.NumberColumn(
-        "HargaJual",
-        format="Rp %d"
-    ),
-    "Uang Seharusnya Dibayar": st.column_config.NumberColumn(
-        "Uang Seharusnya Dibayar",
-        format="Rp %d"
-    ),
-}
-
-if stock_compliance_available:
-    stock_column_config.update({
-        "Stock Sore Olsera": st.column_config.NumberColumn(
-            "Stock Sore Olsera",
-            format="%d"
-        ),
-        "Stock Sore": st.column_config.NumberColumn(
-            "Stock Sore",
-            format="%d"
-        ),
-        "Selisih Stock": st.column_config.NumberColumn(
-            "Selisih Stock",
-            format="%d"
-        ),
-    })
-
 st.dataframe(
     filtered_stock_df,
     use_container_width=True,
-    hide_index=True,
-    column_config=stock_column_config
+    hide_index=True
 )
 
 st.divider()
@@ -1284,7 +1437,7 @@ st.dataframe(
 st.divider()
 
 # ==========================================
-# TOP PRODUK TERLARIS - BOTTOM
+# TOP PRODUK TERLARIS
 # ==========================================
 st.subheader("🔥 Top 10 Produk Terlaris")
 
@@ -1324,18 +1477,6 @@ else:
 st.divider()
 
 # ==========================================
-# DOWNLOAD CSV
-# ==========================================
-csv = rekon_df.to_csv(index=False).encode("utf-8-sig")
-
-st.download_button(
-    label="⬇️ Download Rekonsiliasi CSV",
-    data=csv,
-    file_name="rekonsiliasi_warung_fifgroup.csv",
-    mime="text/csv"
-)
-
-# ==========================================
 # DOWNLOAD EXCEL
 # ==========================================
 excel_buffer = BytesIO()
@@ -1362,14 +1503,6 @@ with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
     filtered_master_df.to_excel(
         writer,
         sheet_name="Master Display",
-        index=False
-    )
-
-    filtered_master_df[
-        filtered_master_df["Status Display"] != "🟢 Sesuai Standar"
-    ].to_excel(
-        writer,
-        sheet_name="Display Perlu Dicek",
         index=False
     )
 
@@ -1403,6 +1536,12 @@ with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
     filtered_qris_df.to_excel(
         writer,
         sheet_name="Detail QRIS",
+        index=False
+    )
+
+    inventory_latest_df.to_excel(
+        writer,
+        sheet_name="Inventory Terakhir",
         index=False
     )
 
